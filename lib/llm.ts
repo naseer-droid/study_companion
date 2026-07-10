@@ -1,0 +1,133 @@
+import Anthropic from "@anthropic-ai/sdk";
+
+// One model call: prompt in, parsed JSON out (handoff §3).
+// Provider is chosen by env so the app works with OpenRouter/DeepSeek today
+// and the native Anthropic API when a key is available.
+
+const MAX_TOKENS = 1024;
+
+class LlmError extends Error {}
+
+function env(name: string, fallback = ""): string {
+  return process.env[name] ?? fallback;
+}
+
+async function callOpenAiCompatible(prompt: string, baseUrl: string, defaultModel: string): Promise<string> {
+  const apiKey = env("LLM_API_KEY");
+  if (!apiKey) throw new LlmError("LLM_API_KEY is not set. Add it to .env.local.");
+  const res = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: env("LLM_MODEL", defaultModel),
+      max_tokens: MAX_TOKENS,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new LlmError(`Model provider returned ${res.status}: ${body.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  const text = data?.choices?.[0]?.message?.content;
+  if (typeof text !== "string") throw new LlmError("Model provider returned no text.");
+  return text;
+}
+
+async function callAnthropic(prompt: string): Promise<string> {
+  const client = new Anthropic(); // reads ANTHROPIC_API_KEY
+  const response = await client.messages.create({
+    model: env("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+    max_tokens: MAX_TOKENS,
+    messages: [{ role: "user", content: prompt }],
+  });
+  return response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+}
+
+// Canned responses so the full UI loop can be exercised without a key.
+function callMock(prompt: string): string {
+  if (prompt.includes("helping someone start learning a new topic")) {
+    return JSON.stringify({
+      brief: "This is a mock brief for local testing. The topic is introduced in plain language across a few sentences so the layout can be checked.",
+      whyItMatters: "It matters because verifying the app end-to-end should not require API credits.",
+      roadmap: [
+        { title: "Foundations", desc: "Learn the core vocabulary and ideas." },
+        { title: "First practice", desc: "Do one small hands-on exercise." },
+        { title: "Core techniques", desc: "Work through the main methods." },
+        { title: "Small project", desc: "Build something end to end." },
+        { title: "Review and deepen", desc: "Revisit weak spots and go deeper." },
+      ],
+      resources: [
+        { title: "A Well-Known Book", type: "book", why: "The standard beginner text." },
+        { title: "A Popular Course", type: "course", why: "Structured and hands-on." },
+        { title: "An Official Website", type: "website", why: "Authoritative reference." },
+        { title: "A YouTube Channel", type: "video", why: "Good visual explanations." },
+      ],
+      firstStep: "Spend 20 minutes reading an introductory article and note three things that surprised you.",
+    });
+  }
+  if (prompt.includes("The learner just shared")) {
+    return JSON.stringify({
+      reply: "Nice — you got the first idea down. I hadn't thought about it that way; I wonder how it connects to what we saw earlier?",
+      updatedMemory: "Mock memory: the learner has made one or more journal entries and we are tracking their progress together.",
+      nextSuggestion: "Tomorrow, try a 15-minute practical exercise on what you just learned.",
+    });
+  }
+  return JSON.stringify({
+    answer: "Mock answer: in plain terms, the thing you asked about works by combining a few simple parts. For example, imagine a tiny version of it with just two pieces.",
+    updatedMemory: "Mock memory: the learner asked a question and we noted the key takeaway.",
+    followUp: "What happens in the edge case we haven't covered yet?",
+  });
+}
+
+async function callProvider(prompt: string): Promise<string> {
+  const provider = env("LLM_PROVIDER", "openrouter").toLowerCase();
+  switch (provider) {
+    case "anthropic":
+      return callAnthropic(prompt);
+    case "deepseek":
+      return callOpenAiCompatible(prompt, "https://api.deepseek.com", "deepseek-chat");
+    case "openrouter":
+      return callOpenAiCompatible(prompt, "https://openrouter.ai/api/v1", "anthropic/claude-sonnet-4.6");
+    case "mock":
+      return callMock(prompt);
+    default:
+      throw new LlmError(`Unknown LLM_PROVIDER "${provider}".`);
+  }
+}
+
+function parseJson(text: string): unknown {
+  const clean = text.replace(/```json|```/g, "").trim();
+  return JSON.parse(clean);
+}
+
+/**
+ * Ask the configured model and parse its JSON response.
+ * On a parse failure, retries the model call once (handoff §3), then throws
+ * a friendly error the API routes can surface verbatim.
+ */
+export async function askModel(prompt: string): Promise<unknown> {
+  let text = await callProvider(prompt);
+  try {
+    return parseJson(text);
+  } catch {
+    text = await callProvider(prompt);
+    try {
+      return parseJson(text);
+    } catch {
+      throw new LlmError("The companion's response wasn't readable. Please try again.");
+    }
+  }
+}
+
+export function errorMessage(e: unknown): string {
+  if (e instanceof LlmError) return e.message;
+  if (e instanceof Error && e.message) return `Couldn't reach the companion: ${e.message}`;
+  return "Couldn't reach the companion. Check your connection and try again.";
+}

@@ -1,0 +1,33 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #141a26;
+}
+
+@keyframes lcPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.lc-pulse {
+  animation: lcPulse 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-pulse {
+    animation: none;
+  }
+  .lc-lamp {
+    transition: none !important;
+  }
+}
