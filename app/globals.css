@@ -23,6 +23,29 @@ body {
   animation: lcPulse 1.2s ease-in-out infinite;
 }
 
+/* On phones the topic tabs become a fixed, thumb-reachable bottom bar. */
+@media (max-width: 520px) {
+  .lc-tabs {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    margin: 0 !important;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    background: rgba(20, 26, 38, 0.96);
+    border-top: 1px solid #2c3750;
+    backdrop-filter: blur(8px);
+  }
+  .lc-tabs button {
+    flex: 1;
+    min-height: 44px; /* comfortable tap target */
+  }
+  .lc-topic-inner {
+    padding-bottom: 84px; /* keep content clear of the bottom bar */
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .lc-pulse {
     animation: none;

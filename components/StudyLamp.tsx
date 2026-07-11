@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, CSSProperties, ReactNode } from "react";
 import type { AppData, Topic } from "@/lib/types";
 import type { TopicSetupResponse, JournalResponse, AskResponse } from "@/lib/schemas";
+import { supabaseEnabled } from "@/lib/supabase/config";
 
 // ---------- palette: "study lamp at night" (handoff §7) ----------
 const C = {
@@ -37,6 +38,10 @@ async function api<T>(path: string, body: unknown): Promise<T> {
 async function loadData(): Promise<AppData> {
   try {
     const res = await fetch("/api/storage");
+    if (res.status === 401) {
+      window.location.href = "/login";
+      return { topics: [] };
+    }
     const data = await res.json();
     return data && Array.isArray(data.topics) ? data : { topics: [] };
   } catch {
@@ -44,16 +49,21 @@ async function loadData(): Promise<AppData> {
   }
 }
 
-async function saveData(d: AppData): Promise<void> {
-  try {
-    await fetch("/api/storage", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(d),
-    });
-  } catch (e) {
-    console.error("Save failed", e);
+// Per-entity mutations: each change is one small operation instead of a
+// whole-data PUT, so two devices can't overwrite each other's entries.
+async function storageOp<T = { ok: true }>(body: unknown): Promise<T> {
+  const res = await fetch("/api/storage", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    window.location.href = "/login";
+    throw new Error("Signed out.");
   }
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.error || "Couldn't save that. Try again.");
+  return data as T;
 }
 
 // ---------- small UI atoms ----------
@@ -182,33 +192,40 @@ export default function StudyLamp() {
   const [asking, setAsking] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [error, setError] = useState("");
+  const [online, setOnline] = useState(true);
   const journalEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     loadData().then(setData);
   }, []);
 
+  // Offline = read-only: the cached data stays viewable, composing is paused.
+  useEffect(() => {
+    const sync = () => setOnline(navigator.onLine);
+    sync();
+    window.addEventListener("online", sync);
+    window.addEventListener("offline", sync);
+    return () => {
+      window.removeEventListener("online", sync);
+      window.removeEventListener("offline", sync);
+    };
+  }, []);
+
   useEffect(() => {
     if (journalEndRef.current) journalEndRef.current.scrollIntoView({ behavior: "smooth" });
   }, [data, tab]);
-
-  const persist = async (next: AppData) => {
-    setData(next);
-    await saveData(next);
-  };
 
   const active = data?.topics.find((t) => t.id === activeId);
 
   // ----- create topic -----
   const createTopic = async () => {
     const name = newTopic.trim();
-    if (!name || creating || !data) return;
+    if (!name || creating || !data || !online) return;
     setCreating(true);
     setError("");
     try {
       const plan = await api<TopicSetupResponse>("/api/topic", { topic: name });
-      const topic: Topic = {
-        id: Date.now().toString(36),
+      const draft: Omit<Topic, "id"> = {
         name,
         createdAt: new Date().toISOString(),
         brief: plan.brief || "",
@@ -221,8 +238,9 @@ export default function StudyLamp() {
         memory: "",
         nextSuggestion: plan.firstStep || "",
       };
-      const next = { ...data, topics: [topic, ...data.topics] };
-      await persist(next);
+      // The server assigns the id (a DB uuid in cloud mode).
+      const { topic } = await storageOp<{ topic: Topic }>({ op: "createTopic", topic: draft });
+      setData({ ...data, topics: [topic, ...data.topics] });
       setNewTopic("");
       setActiveId(topic.id);
       setTab("overview");
@@ -235,7 +253,7 @@ export default function StudyLamp() {
   // ----- journal entry -----
   const submitEntry = async () => {
     const text = entryText.trim();
-    if (!text || thinking || !active || !data) return;
+    if (!text || thinking || !active || !data || !online) return;
     setThinking(true);
     setError("");
     try {
@@ -249,17 +267,21 @@ export default function StudyLamp() {
         userNote: text,
         companionReply: res.reply || "",
       };
+      const memory = res.updatedMemory || active.memory;
+      const nextSuggestion = res.nextSuggestion || active.nextSuggestion;
+      await storageOp({
+        op: "addJournalEntry",
+        topicId: active.id,
+        entry,
+        memory,
+        nextSuggestion,
+      });
       const topics = data.topics.map((t) =>
         t.id === active.id
-          ? {
-              ...t,
-              journal: [...t.journal, entry],
-              memory: res.updatedMemory || t.memory,
-              nextSuggestion: res.nextSuggestion || t.nextSuggestion,
-            }
+          ? { ...t, journal: [...t.journal, entry], memory, nextSuggestion }
           : t
       );
-      await persist({ ...data, topics });
+      setData({ ...data, topics });
       setEntryText("");
     } catch (e) {
       setError(
@@ -272,7 +294,7 @@ export default function StudyLamp() {
   // ----- ask a question (also feeds shared memory) -----
   const askQuestion = async () => {
     const q = askText.trim();
-    if (!q || asking || !active || !data) return;
+    if (!q || asking || !active || !data || !online) return;
     setAsking(true);
     setError("");
     try {
@@ -287,10 +309,12 @@ export default function StudyLamp() {
         a: res.answer || "",
         followUp: res.followUp || "",
       };
+      const memory = res.updatedMemory || active.memory;
+      await storageOp({ op: "addQA", topicId: active.id, item, memory });
       const topics = data.topics.map((t) =>
-        t.id === active.id ? { ...t, qa: [...(t.qa || []), item], memory: res.updatedMemory || t.memory } : t
+        t.id === active.id ? { ...t, qa: [...(t.qa || []), item], memory } : t
       );
-      await persist({ ...data, topics });
+      setData({ ...data, topics });
       setAskText("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't get an answer just now - try again.");
@@ -299,22 +323,33 @@ export default function StudyLamp() {
   };
 
   const toggleStage = async (stageId: number) => {
-    if (!data || !active) return;
-    const topics = data.topics.map((t) =>
-      t.id === active.id
-        ? { ...t, roadmap: t.roadmap.map((s) => (s.id === stageId ? { ...s, done: !s.done } : s)) }
-        : t
-    );
-    await persist({ ...data, topics });
+    if (!data || !active || !online) return;
+    const roadmap = active.roadmap.map((s) => (s.id === stageId ? { ...s, done: !s.done } : s));
+    // Optimistic: update the UI first, reload from the server if the save fails.
+    setData({
+      ...data,
+      topics: data.topics.map((t) => (t.id === active.id ? { ...t, roadmap } : t)),
+    });
+    try {
+      await storageOp({ op: "updateRoadmap", topicId: active.id, roadmap });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't save that. Try again.");
+      loadData().then(setData);
+    }
   };
 
   const deleteTopic = async (id: string) => {
-    if (!data) return;
+    if (!data || !online) return;
     const topic = data.topics.find((t) => t.id === id);
     if (!window.confirm(`Delete "${topic?.name ?? "this topic"}" and its journal? This can't be undone.`)) return;
-    const topics = data.topics.filter((t) => t.id !== id);
-    await persist({ ...data, topics });
+    setData({ ...data, topics: data.topics.filter((t) => t.id !== id) });
     if (activeId === id) setActiveId(null);
+    try {
+      await storageOp({ op: "deleteTopic", topicId: id });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't delete that. Try again.");
+      loadData().then(setData);
+    }
   };
 
   // ---------- render ----------
@@ -335,6 +370,23 @@ export default function StudyLamp() {
   };
   const inner: CSSProperties = { maxWidth: 680, margin: "0 auto" };
 
+  const offlineNote = !online && (
+    <div
+      style={{
+        background: C.panel2,
+        border: `1px solid ${C.line}`,
+        borderRadius: 10,
+        padding: "8px 12px",
+        color: C.dim,
+        fontSize: 13,
+        lineHeight: 1.5,
+        marginBottom: 14,
+      }}
+    >
+      You&apos;re offline — showing your last sync. Reading works; writing needs a connection.
+    </div>
+  );
+
   // ----- home -----
   if (!active) {
     return (
@@ -342,13 +394,34 @@ export default function StudyLamp() {
         <div style={inner}>
           <header style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 6 }}>
             <Lamp level={Math.min(1, data.topics.reduce((a, t) => a + t.journal.length, 0) / 15)} />
-            <div>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <h1 style={{ fontFamily: serif, fontSize: 30, fontWeight: 500, margin: 0, letterSpacing: "-0.01em" }}>
                 Study Lamp
               </h1>
               <div style={{ color: C.dim, fontSize: 14 }}>A companion that learns alongside you</div>
             </div>
+            {supabaseEnabled && (
+              <form action="/auth/signout" method="post">
+                <button
+                  type="submit"
+                  style={{
+                    fontFamily: sans,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    background: "transparent",
+                    color: C.dim,
+                    border: `1px solid ${C.line}`,
+                    borderRadius: 8,
+                    padding: "7px 10px",
+                    cursor: "pointer",
+                  }}
+                >
+                  Sign out
+                </button>
+              </form>
+            )}
           </header>
+          {offlineNote && <div style={{ marginTop: 12 }}>{offlineNote}</div>}
 
           <Card style={{ marginTop: 22 }}>
             <Eyebrow>Start something new</Eyebrow>
@@ -365,11 +438,11 @@ export default function StudyLamp() {
                   borderRadius: 10,
                   padding: "10px 12px",
                   color: C.ink,
-                  fontSize: 15,
+                  fontSize: 16, // ≥16px stops iOS Safari zooming the field on focus
                   outline: "none",
                 }}
               />
-              <Btn onClick={createTopic} disabled={creating || !newTopic.trim()}>
+              <Btn onClick={createTopic} disabled={creating || !newTopic.trim() || !online}>
                 {creating ? "Reading up..." : "Begin"}
               </Btn>
             </div>
@@ -445,7 +518,7 @@ export default function StudyLamp() {
 
   return (
     <div style={wrap}>
-      <div style={inner}>
+      <div style={inner} className="lc-topic-inner">
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
           <Btn variant="ghost" onClick={() => setActiveId(null)} style={{ padding: "8px 12px" }}>
             ← Topics
@@ -468,7 +541,9 @@ export default function StudyLamp() {
           </h1>
         </div>
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+        {offlineNote}
+
+        <div className="lc-tabs" style={{ display: "flex", gap: 8, marginBottom: 18 }}>
           {tabs.map(([key, label]) => (
             <button
               key={key}
@@ -505,6 +580,45 @@ export default function StudyLamp() {
             <Card style={{ borderColor: C.amber, background: C.amberSoft }}>
               <Eyebrow>Start here today</Eyebrow>
               <p style={{ margin: 0, lineHeight: 1.6, fontSize: 15 }}>{active.firstStep}</p>
+            </Card>
+
+            {/* Gentle progress: numbers that only ever grow — no streaks, no guilt. */}
+            <Card>
+              <Eyebrow>Our progress</Eyebrow>
+              <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 14, lineHeight: 1.6 }}>
+                <span>
+                  <strong style={{ color: C.sage }}>{doneCount}</strong>
+                  <span style={{ color: C.dim }}>/{active.roadmap.length} stages</span>
+                </span>
+                <span>
+                  <strong>{active.journal.length}</strong>{" "}
+                  <span style={{ color: C.dim }}>journal {active.journal.length === 1 ? "entry" : "entries"}</span>
+                </span>
+                <span>
+                  <strong>{qaList.length}</strong>{" "}
+                  <span style={{ color: C.dim }}>{qaList.length === 1 ? "question" : "questions"} asked</span>
+                </span>
+              </div>
+              <div style={{ marginTop: 12, height: 5, background: C.bg, borderRadius: 3 }}>
+                <div
+                  style={{
+                    width: `${active.roadmap.length ? (doneCount / active.roadmap.length) * 100 : 0}%`,
+                    height: "100%",
+                    background: C.sage,
+                    borderRadius: 3,
+                    transition: "width 0.4s",
+                  }}
+                />
+              </div>
+              <div style={{ marginTop: 10, color: C.dim, fontSize: 12 }}>
+                Learning together since{" "}
+                {new Date(active.createdAt).toLocaleDateString(undefined, {
+                  month: "long",
+                  day: "numeric",
+                  year: "numeric",
+                })}
+                . Come back whenever — the lamp stays lit.
+              </div>
             </Card>
 
             <Card>
@@ -611,14 +725,14 @@ export default function StudyLamp() {
                   borderRadius: 10,
                   padding: "10px 12px",
                   color: C.ink,
-                  fontSize: 15,
+                  fontSize: 16, // ≥16px stops iOS Safari zooming the field on focus
                   fontFamily: sans,
                   outline: "none",
                   resize: "vertical",
                 }}
               />
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10 }}>
-                <Btn onClick={askQuestion} disabled={asking || !askText.trim()}>
+                <Btn onClick={askQuestion} disabled={asking || !askText.trim() || !online}>
                   {asking ? "Thinking..." : "Ask"}
                 </Btn>
                 {asking && <Spinner label="Looking into it..." />}
@@ -700,14 +814,14 @@ export default function StudyLamp() {
                   borderRadius: 10,
                   padding: "10px 12px",
                   color: C.ink,
-                  fontSize: 15,
+                  fontSize: 16, // ≥16px stops iOS Safari zooming the field on focus
                   fontFamily: sans,
                   outline: "none",
                   resize: "vertical",
                 }}
               />
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10 }}>
-                <Btn onClick={submitEntry} disabled={thinking || !entryText.trim()}>
+                <Btn onClick={submitEntry} disabled={thinking || !entryText.trim() || !online}>
                   {thinking ? "Listening..." : "Share"}
                 </Btn>
                 {thinking && <Spinner label="The companion is reflecting..." />}

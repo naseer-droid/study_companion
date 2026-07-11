@@ -3,6 +3,9 @@ import { askModel, errorMessage } from "@/lib/llm";
 import { askPrompt } from "@/lib/prompts";
 import { askSchema } from "@/lib/schemas";
 
+// LLM round-trips can take 30-60s; be explicit about the budget on Vercel.
+export const maxDuration = 60;
+
 export async function POST(req: Request) {
   try {
     const { topic, memory, question } = await req.json();
