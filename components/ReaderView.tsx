@@ -135,7 +135,7 @@ export default function ReaderView({
                   }}
                 >
                   <iframe
-                    src={`https://www.youtube-nocookie.com/embed/${embed.id}${embed.start ? `?start=${embed.start}` : ""}`}
+                    src={`https://www.youtube.com/embed/${embed.id}${embed.start ? `?start=${embed.start}` : ""}`}
                     title={item.title}
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                     allowFullScreen
