@@ -16,9 +16,10 @@ Open http://localhost:3000 (or 3001 if 3000 is busy).
 
 | Variable | Values | Notes |
 |---|---|---|
-| `LLM_PROVIDER` | `openrouter` \| `deepseek` \| `anthropic` \| `mock` | `mock` runs with no key (canned responses) |
-| `LLM_API_KEY` | your key | for openrouter/deepseek |
-| `LLM_MODEL` | e.g. `anthropic/claude-sonnet-4.6`, `deepseek-chat` | provider model slug |
+| `LLM_PROVIDER` | `kimi` (default) \| `deepseek` \| `openrouter` \| `anthropic` \| `mock` | `mock` runs with no key (canned responses) |
+| `LLM_API_KEY` | your key | for kimi/deepseek/openrouter |
+| `LLM_MODEL` | e.g. `k3`, `deepseek-chat`, `anthropic/claude-sonnet-4.6` | provider model slug (`k3` default for kimi) |
+| `LLM_BASE_URL` | e.g. `https://api.moonshot.cn/v1` | only to override the Kimi Code endpoint (`https://api.kimi.com/coding/v1`) |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | key / `claude-sonnet-4-6` | only for `LLM_PROVIDER=anthropic` |
 
 ## How it's put together

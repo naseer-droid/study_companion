@@ -39,7 +39,7 @@ Things only you can do. Tick them here **and** update the matching line in
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable key>
     SUPABASE_SECRET_KEY=<secret key>        # used only by /api/keepalive
     CRON_SECRET=<any long random string>    # protects the keepalive route
-    LLM_PROVIDER=deepseek                   # + LLM_API_KEY as you already have
+    LLM_PROVIDER=kimi                       # + LLM_API_KEY from the Kimi Code Console
     ```
   - *Verify locally:* `npm run dev` → you now get the login page; sign up (your
     email is allowlisted) → confirm → the app loads empty (cloud data).

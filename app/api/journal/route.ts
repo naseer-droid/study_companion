@@ -3,8 +3,8 @@ import { askModel, errorMessage } from "@/lib/llm";
 import { journalPrompt } from "@/lib/prompts";
 import { journalSchema } from "@/lib/schemas";
 
-// LLM round-trips can take 30-60s; be explicit about the budget on Vercel.
-export const maxDuration = 60;
+// K3's thinking pushes LLM round-trips past 60s; stay under Vercel's 300s.
+export const maxDuration = 180;
 
 export async function POST(req: Request) {
   try {

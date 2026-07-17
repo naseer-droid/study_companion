@@ -1,8 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 // One model call: prompt in, parsed JSON out (handoff §3).
-// Provider is chosen by env so the app works with OpenRouter/DeepSeek today
-// and the native Anthropic API when a key is available.
+// Provider is chosen by env: Kimi K3 by default, with DeepSeek/OpenRouter
+// and the native Anthropic API as alternates.
 
 const MAX_TOKENS = 1024;
 
@@ -12,7 +12,7 @@ function env(name: string, fallback = ""): string {
   return process.env[name] ?? fallback;
 }
 
-async function callOpenAiCompatible(prompt: string, baseUrl: string, defaultModel: string): Promise<string> {
+async function callOpenAiCompatible(prompt: string, baseUrl: string, defaultModel: string, maxTokens = MAX_TOKENS): Promise<string> {
   const apiKey = env("LLM_API_KEY");
   if (!apiKey) throw new LlmError("LLM_API_KEY is not set. Add it to .env.local.");
   const res = await fetch(`${baseUrl}/chat/completions`, {
@@ -23,7 +23,7 @@ async function callOpenAiCompatible(prompt: string, baseUrl: string, defaultMode
     },
     body: JSON.stringify({
       model: env("LLM_MODEL", defaultModel),
-      max_tokens: MAX_TOKENS,
+      max_tokens: maxTokens,
       messages: [{ role: "user", content: prompt }],
     }),
   });
@@ -87,10 +87,18 @@ function callMock(prompt: string): string {
 }
 
 async function callProvider(prompt: string): Promise<string> {
-  const provider = env("LLM_PROVIDER", "openrouter").toLowerCase();
+  const provider = env("LLM_PROVIDER", "kimi").toLowerCase();
   switch (provider) {
     case "anthropic":
       return callAnthropic(prompt);
+    case "kimi":
+    case "moonshot":
+      // Kimi Code endpoint (API key from the Kimi Code Console, uses the
+      // membership quota). For the pay-as-you-go Open Platform instead, set
+      // LLM_BASE_URL=https://api.moonshot.cn/v1 and its LLM_MODEL slug.
+      // K3 reasons before answering and reasoning shares the completion
+      // budget — at 1024 tokens thinking consumes it all (empty reply).
+      return callOpenAiCompatible(prompt, env("LLM_BASE_URL", "https://api.kimi.com/coding/v1"), "k3", 4096);
     case "deepseek":
       return callOpenAiCompatible(prompt, "https://api.deepseek.com", "deepseek-chat");
     case "openrouter":
