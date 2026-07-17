@@ -18,7 +18,12 @@ async function api<T>(path: string, body: unknown): Promise<T> {
   });
   const data = await res.json().catch(() => null);
   if (!res.ok) {
-    throw new Error(data?.error || "Couldn't reach the companion. Check your connection and try again.");
+    // Non-JSON bodies (Vercel error pages, timeouts) carry no message of
+    // their own — include the status so failures are diagnosable.
+    throw new Error(
+      data?.error ||
+        `Couldn't reach the companion (error ${res.status}). Check your connection and try again.`
+    );
   }
   return data as T;
 }

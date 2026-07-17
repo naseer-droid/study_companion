@@ -56,17 +56,21 @@ async function fetchYouTube(url: string, videoId: string): Promise<Extracted> {
   // has no official API and breaks occasionally — designed-in fallback:
   // hasContent=false and the companion discusses from the title + the
   // learner's own account.
+  // Hard 15s budget: from datacenter IPs YouTube often HANGS rather than
+  // refuses, and an unbounded wait gets the serverless function killed —
+  // the client then receives an HTML error page it can't read.
   let content = "";
-  try {
-    const parts = await YoutubeTranscript.fetchTranscript(videoId);
+  const parts = await Promise.race([
+    YoutubeTranscript.fetchTranscript(videoId).catch(() => null),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000)),
+  ]);
+  if (parts) {
     content = parts
       .map((p) => p.text)
       .join(" ")
       .replace(/\[.*?\]/g, " ") // drop [Music]-style markers
       .replace(/\s+/g, " ")
       .trim();
-  } catch {
-    content = "";
   }
   return { title, siteName, thumbnail, content };
 }
