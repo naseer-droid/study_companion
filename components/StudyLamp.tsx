@@ -1,25 +1,13 @@
 "use client";
 
-import { useState, useEffect, useRef, CSSProperties, ReactNode } from "react";
-import type { AppData, Topic } from "@/lib/types";
+import { useState, useEffect, useRef, CSSProperties } from "react";
+import type { AppData, Topic, LibraryItem, DiscussionMsg } from "@/lib/types";
 import type { TopicSetupResponse, JournalResponse, AskResponse } from "@/lib/schemas";
 import { supabaseEnabled } from "@/lib/supabase/config";
-
-// ---------- palette: "study lamp at night" (handoff §7) ----------
-const C = {
-  bg: "#141A26",
-  panel: "#1C2433",
-  panel2: "#222D40",
-  line: "#2C3750",
-  ink: "#EFEAE0",
-  dim: "#8A94A8",
-  amber: "#F5B34E",
-  amberSoft: "rgba(245,179,78,0.14)",
-  sage: "#8FBF7F",
-  danger: "#D9776B",
-};
-const serif = "Georgia, 'Iowan Old Style', 'Times New Roman', serif";
-const sans = "-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+import { C, serif, sans, Card, Eyebrow, Btn, Spinner } from "./lamp-ui";
+import Library from "./Library";
+import ReaderView from "./ReaderView";
+import DiscussPanel from "./DiscussPanel";
 
 // ---------- server calls ----------
 async function api<T>(path: string, body: unknown): Promise<T> {
@@ -66,39 +54,7 @@ async function storageOp<T = { ok: true }>(body: unknown): Promise<T> {
   return data as T;
 }
 
-// ---------- small UI atoms ----------
-function Card({ children, style }: { children: ReactNode; style?: CSSProperties }) {
-  return (
-    <div
-      style={{
-        background: C.panel,
-        border: `1px solid ${C.line}`,
-        borderRadius: 14,
-        padding: 16,
-        ...style,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function Eyebrow({ children }: { children: ReactNode }) {
-  return (
-    <div
-      style={{
-        fontFamily: sans,
-        fontSize: 11,
-        letterSpacing: "0.14em",
-        textTransform: "uppercase",
-        color: C.amber,
-        marginBottom: 8,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
+// ---------- small UI atoms live in ./lamp-ui (shared with the Study Room) ----------
 
 // The companion's presence: a dark glass orb with an ember inside.
 // The ember grows and the glow spreads as you learn together.
@@ -128,58 +84,6 @@ function Lamp({ level, size = 44 }: { level: number; size?: number }) {
   );
 }
 
-function Btn({
-  children,
-  onClick,
-  disabled,
-  variant = "solid",
-  style,
-}: {
-  children: ReactNode;
-  onClick?: () => void;
-  disabled?: boolean;
-  variant?: "solid" | "ghost" | "danger";
-  style?: CSSProperties;
-}) {
-  const base: CSSProperties = {
-    fontFamily: sans,
-    fontSize: 14,
-    fontWeight: 600,
-    borderRadius: 10,
-    padding: "10px 16px",
-    cursor: disabled ? "default" : "pointer",
-    opacity: disabled ? 0.5 : 1,
-    border: "none",
-    transition: "opacity 0.2s",
-  };
-  const variants: Record<string, CSSProperties> = {
-    solid: { background: C.amber, color: "#1B1406" },
-    ghost: {
-      background: "transparent",
-      color: C.dim,
-      border: `1px solid ${C.line}`,
-    },
-    danger: { background: "transparent", color: C.danger, border: `1px solid ${C.line}` },
-  };
-  return (
-    <button onClick={onClick} disabled={disabled} style={{ ...base, ...variants[variant], ...style }}>
-      {children}
-    </button>
-  );
-}
-
-function Spinner({ label }: { label: string }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, color: C.dim, fontFamily: sans, fontSize: 14 }}>
-      <span
-        className="lc-pulse"
-        style={{ width: 10, height: 10, borderRadius: "50%", background: C.amber, display: "inline-block" }}
-      />
-      {label}
-    </div>
-  );
-}
-
 // ---------- main app ----------
 export default function StudyLamp() {
   const [data, setData] = useState<AppData | null>(null);
@@ -193,6 +97,9 @@ export default function StudyLamp() {
   const [thinking, setThinking] = useState(false);
   const [error, setError] = useState("");
   const [online, setOnline] = useState(true);
+  const [openItemId, setOpenItemId] = useState<string | null>(null);
+  const [greeting, setGreeting] = useState("");
+  const [greetingDismissed, setGreetingDismissed] = useState(false);
   const journalEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -215,6 +122,24 @@ export default function StudyLamp() {
     if (journalEndRef.current) journalEndRef.current.scrollIntoView({ behavior: "smooth" });
   }, [data, tab]);
 
+  // Session greeting: one short continuity note per topic-open, never blocking
+  // and never an error surface — the strip just stays hidden on failure.
+  useEffect(() => {
+    setGreeting("");
+    setGreetingDismissed(false);
+    if (!activeId || !online) return;
+    fetch("/api/greeting", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topicId: activeId }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d && typeof d.greeting === "string") setGreeting(d.greeting);
+      })
+      .catch(() => {});
+  }, [activeId, online]);
+
   const active = data?.topics.find((t) => t.id === activeId);
 
   // ----- create topic -----
@@ -235,6 +160,7 @@ export default function StudyLamp() {
         firstStep: plan.firstStep || "",
         journal: [],
         qa: [],
+        library: [],
         memory: "",
         nextSuggestion: plan.firstStep || "",
       };
@@ -350,6 +276,91 @@ export default function StudyLamp() {
       setError(e instanceof Error ? e.message : "Couldn't delete that. Try again.");
       loadData().then(setData);
     }
+  };
+
+  // ----- Study Room: library items + discussion -----
+  const addLibraryItem = async (url: string) => {
+    if (!data || !active) return;
+    const { item } = await api<{ item: LibraryItem }>("/api/library", { topicId: active.id, url });
+    setData({
+      ...data,
+      topics: data.topics.map((t) =>
+        t.id === active.id ? { ...t, library: [...(t.library ?? []), item] } : t
+      ),
+    });
+  };
+
+  const setLibraryStatus = async (itemId: string, status: LibraryItem["status"]) => {
+    if (!data || !active) return;
+    // Optimistic, like toggleStage: update first, reload if the save fails.
+    setData({
+      ...data,
+      topics: data.topics.map((t) =>
+        t.id === active.id
+          ? { ...t, library: (t.library ?? []).map((i) => (i.id === itemId ? { ...i, status } : i)) }
+          : t
+      ),
+    });
+    try {
+      await storageOp({ op: "updateLibraryStatus", itemId, status });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't save that. Try again.");
+      loadData().then(setData);
+    }
+  };
+
+  const openLibraryItem = (itemId: string) => {
+    setOpenItemId(itemId);
+    const item = (active?.library ?? []).find((i) => i.id === itemId);
+    if (item && item.status === "unread" && online) void setLibraryStatus(itemId, "reading");
+  };
+
+  const deleteLibraryItem = async (itemId: string) => {
+    if (!data || !active || !online) return;
+    const item = (active.library ?? []).find((i) => i.id === itemId);
+    if (
+      !window.confirm(
+        `Remove "${item?.title ?? "this item"}" and its discussion? This can't be undone.`
+      )
+    )
+      return;
+    setData({
+      ...data,
+      topics: data.topics.map((t) =>
+        t.id === active.id ? { ...t, library: (t.library ?? []).filter((i) => i.id !== itemId) } : t
+      ),
+    });
+    if (openItemId === itemId) setOpenItemId(null);
+    try {
+      await storageOp({ op: "deleteLibraryItem", itemId });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't delete that. Try again.");
+      loadData().then(setData);
+    }
+  };
+
+  const sendDiscussion = async (itemId: string, message: string) => {
+    if (!data || !active) return;
+    const res = await api<{ userMsg: DiscussionMsg; companionMsg: DiscussionMsg; memory: string }>(
+      "/api/discuss",
+      { topicId: active.id, itemId, message }
+    );
+    setData({
+      ...data,
+      topics: data.topics.map((t) =>
+        t.id === active.id
+          ? {
+              ...t,
+              memory: res.memory || t.memory,
+              library: (t.library ?? []).map((i) =>
+                i.id === itemId
+                  ? { ...i, discussion: [...i.discussion, res.userMsg, res.companionMsg] }
+                  : i
+              ),
+            }
+          : t
+      ),
+    });
   };
 
   // ---------- render ----------
@@ -473,6 +484,7 @@ export default function StudyLamp() {
                         onClick={() => {
                           setActiveId(t.id);
                           setTab("overview");
+                          setOpenItemId(null);
                         }}
                       >
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
@@ -509,9 +521,12 @@ export default function StudyLamp() {
   const doneCount = active.roadmap.filter((s) => s.done).length;
   const glowLevel = Math.min(1, (active.journal.length + (active.qa || []).length * 0.5) / 10);
   const qaList = active.qa || [];
+  const libraryList = active.library ?? [];
+  const openItem = libraryList.find((i) => i.id === openItemId) ?? null;
   const tabs: [string, string][] = [
     ["overview", "Brief"],
     ["path", "Path"],
+    ["library", `Library${libraryList.length ? " · " + libraryList.length : ""}`],
     ["ask", `Ask${qaList.length ? " · " + qaList.length : ""}`],
     ["journal", `Journal${active.journal.length ? " · " + active.journal.length : ""}`],
   ];
@@ -520,7 +535,14 @@ export default function StudyLamp() {
     <div style={wrap}>
       <div style={inner} className="lc-topic-inner">
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-          <Btn variant="ghost" onClick={() => setActiveId(null)} style={{ padding: "8px 12px" }}>
+          <Btn
+            variant="ghost"
+            onClick={() => {
+              setActiveId(null);
+              setOpenItemId(null);
+            }}
+            style={{ padding: "8px 12px" }}
+          >
             ← Topics
           </Btn>
           <Lamp level={glowLevel} size={34} />
@@ -564,6 +586,40 @@ export default function StudyLamp() {
             </button>
           ))}
         </div>
+
+        {greeting && !greetingDismissed && (
+          <div
+            style={{
+              background: C.amberSoft,
+              border: `1px solid ${C.amber}`,
+              borderRadius: 12,
+              padding: "10px 14px",
+              marginBottom: 16,
+              display: "flex",
+              gap: 10,
+              alignItems: "flex-start",
+            }}
+          >
+            <div style={{ flex: 1, fontFamily: serif, fontSize: 14, lineHeight: 1.6 }}>
+              {greeting}
+            </div>
+            <button
+              onClick={() => setGreetingDismissed(true)}
+              aria-label="Dismiss greeting"
+              style={{
+                background: "none",
+                border: "none",
+                color: C.dim,
+                cursor: "pointer",
+                fontSize: 16,
+                padding: 2,
+                lineHeight: 1,
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         {tab === "overview" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -708,6 +764,16 @@ export default function StudyLamp() {
           </div>
         )}
 
+        {tab === "library" && (
+          <Library
+            topic={active}
+            online={online}
+            onAdd={addLibraryItem}
+            onOpen={openLibraryItem}
+            onDelete={deleteLibraryItem}
+          />
+        )}
+
         {tab === "ask" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <Card>
@@ -829,6 +895,21 @@ export default function StudyLamp() {
               {error && <div style={{ marginTop: 10, color: C.danger, fontSize: 13 }}>{error}</div>}
             </Card>
           </div>
+        )}
+
+        {openItem && (
+          <ReaderView
+            item={openItem}
+            onClose={() => setOpenItemId(null)}
+            panel={
+              <DiscussPanel
+                item={openItem}
+                online={online}
+                onSend={(m) => sendDiscussion(openItem.id, m)}
+                onSetStatus={(s) => setLibraryStatus(openItem.id, s)}
+              />
+            }
+          />
         )}
       </div>
     </div>

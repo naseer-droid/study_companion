@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getRequestStorage } from "@/lib/storage";
-import type { AppData, JournalEntry, QAItem, RoadmapStage, Topic } from "@/lib/types";
+import type { AppData, JournalEntry, LibraryItem, QAItem, RoadmapStage, Topic } from "@/lib/types";
 
 export async function GET() {
   const ctx = await getRequestStorage();
@@ -72,6 +72,25 @@ export async function POST(req: Request) {
           return NextResponse.json({ error: "Invalid roadmap." }, { status: 400 });
         }
         await storage.updateRoadmap(userId, body.topicId, body.roadmap as RoadmapStage[]);
+        return NextResponse.json({ ok: true });
+      }
+      case "updateLibraryStatus": {
+        const status = body.status;
+        if (
+          typeof body.itemId !== "string" ||
+          typeof status !== "string" ||
+          !["unread", "reading", "done"].includes(status)
+        ) {
+          return NextResponse.json({ error: "Invalid library status." }, { status: 400 });
+        }
+        await storage.updateLibraryStatus(userId, body.itemId, status as LibraryItem["status"]);
+        return NextResponse.json({ ok: true });
+      }
+      case "deleteLibraryItem": {
+        if (typeof body.itemId !== "string") {
+          return NextResponse.json({ error: "Missing itemId." }, { status: 400 });
+        }
+        await storage.deleteLibraryItem(userId, body.itemId);
         return NextResponse.json({ ok: true });
       }
       case "import": {

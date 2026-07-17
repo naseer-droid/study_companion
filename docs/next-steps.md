@@ -70,3 +70,22 @@ Things only you can do. Tick them here **and** update the matching line in
     "Add to Home Screen" (the app shows a one-time hint).
   - *Verify:* opens full-screen with the lamp icon; airplane mode still shows
     your topics read-only with the offline banner.
+
+## v3.0 Study Room — new owner actions (2026-07-17)
+
+- [ ] **Re-run `supabase/schema.sql`** in the SQL editor (idempotent) — adds the
+  `library_items` and `discussion_messages` tables with RLS.
+  - *Verify:* Table Editor shows both new tables.
+
+- [ ] **Redeploy to Vercel** so the new routes ship (`/api/library`,
+  `/api/library/content`, `/api/discuss`, `/api/greeting`).
+
+- [ ] **Verify the Study Room on the deployed app**
+  - *How:* open a topic → Library tab → paste a real article URL → card with
+    title/thumbnail appears; open it → clean reader view. Paste a YouTube URL →
+    card + playable embed. Send a message in Discuss → reply references the
+    content; reload → discussion persists. Reopen the topic → greeting strip
+    references last activity.
+  - *Note:* YouTube transcripts come from an unofficial client and can fail;
+    the video still embeds and the companion discusses from the title (this is
+    the designed fallback, not a bug).

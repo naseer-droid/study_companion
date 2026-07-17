@@ -54,3 +54,88 @@ body {
     transition: none !important;
   }
 }
+
+/* --- Study Room: reader + discussion layout --- */
+.lc-reader-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.lc-reader-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+.lc-discuss-side {
+  width: 380px;
+  flex-shrink: 0;
+  border-left: 1px solid #2c3750;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+  background: #1c2433;
+}
+.lc-discuss-fab,
+.lc-sheet-close {
+  display: none;
+}
+
+/* On smaller screens the discussion becomes a slide-up sheet with a floating
+   "Discuss" button. */
+@media (max-width: 1023px) {
+  .lc-discuss-side {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: 18%;
+    z-index: 70;
+    width: auto;
+    border-left: none;
+    border-top: 1px solid #2c3750;
+    border-radius: 16px 16px 0 0;
+    transform: translateY(105%);
+    transition: transform 0.25s ease;
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.5);
+  }
+  .lc-discuss-side.open {
+    transform: translateY(0);
+  }
+  .lc-discuss-fab {
+    display: block;
+    position: fixed;
+    right: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom));
+    z-index: 65;
+    background: #f5b34e;
+    color: #1b1406;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    border: none;
+    border-radius: 999px;
+    padding: 12px 20px;
+    cursor: pointer;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  }
+  .lc-sheet-close {
+    display: block;
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    z-index: 2;
+    background: none;
+    border: none;
+    color: #8a94a8;
+    font-size: 22px;
+    cursor: pointer;
+    padding: 4px 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-discuss-side {
+    transition: none !important;
+  }
+}

@@ -38,6 +38,18 @@ export const askSchema = z.object({
   followUp: z.string().default(""),
 });
 
+// --- Study Room (v3.0) ---
+export const discussSchema = z.object({
+  reply: z.string(),
+  updatedMemory: z.string(),
+});
+
+export const greetingSchema = z.object({
+  greeting: z.string(),
+});
+
 export type TopicSetupResponse = z.infer<typeof topicSetupSchema>;
 export type JournalResponse = z.infer<typeof journalSchema>;
 export type AskResponse = z.infer<typeof askSchema>;
+export type DiscussResponse = z.infer<typeof discussSchema>;
+export type GreetingResponse = z.infer<typeof greetingSchema>;

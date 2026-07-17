@@ -79,6 +79,18 @@ function callMock(prompt: string): string {
       nextSuggestion: "Tomorrow, try a 15-minute practical exercise on what you just learned.",
     });
   }
+  // Study Room (v3.0) mock branches — keyed on distinctive prompt substrings.
+  if (prompt.includes("just spent time with this")) {
+    return JSON.stringify({
+      reply: "Mock discussion reply: that's a fair reading of it — the part you mention connects to the main argument near the end. What did you make of the author's example?",
+      updatedMemory: "Mock memory: the learner saved an item to the library and we discussed its key ideas together.",
+    });
+  }
+  if (prompt.includes("welcoming the learner back")) {
+    return JSON.stringify({
+      greeting: "Mock greeting: last time we were working through the middle stages — want to pick up there, or revisit what felt shaky?",
+    });
+  }
   return JSON.stringify({
     answer: "Mock answer: in plain terms, the thing you asked about works by combining a few simple parts. For example, imagine a tiny version of it with just two pieces.",
     updatedMemory: "Mock memory: the learner asked a question and we noted the key takeaway.",

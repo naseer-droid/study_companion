@@ -156,6 +156,72 @@ grant select, insert, delete on public.journal_entries to authenticated;
 grant select, insert, delete on public.questions to authenticated;
 
 -- ============================================================
+-- Study Room (v3.0): per-topic library of articles/videos the learner
+-- pastes in, plus the discussion threads about each item. Extracted
+-- article text / transcripts live in library_items.content and are
+-- fetched on demand, never with the topic load.
+-- ============================================================
+create table if not exists public.library_items (
+  id uuid primary key default gen_random_uuid(),
+  topic_id uuid not null references public.topics (id) on delete cascade,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  kind text not null check (kind in ('article', 'youtube')),
+  url text not null,
+  title text not null default '',
+  site_name text,
+  thumbnail text,
+  status text not null default 'unread' check (status in ('unread', 'reading', 'done')),
+  has_content boolean not null default false,
+  content text not null default '',
+  added_at timestamptz not null default now()
+);
+
+create table if not exists public.discussion_messages (
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid not null references public.library_items (id) on delete cascade,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  date timestamptz not null default now(),
+  role text not null check (role in ('user', 'companion')),
+  text text not null default ''
+);
+
+create index if not exists library_items_topic_added on public.library_items (topic_id, added_at);
+create index if not exists discussion_messages_item_date on public.discussion_messages (item_id, date);
+
+alter table public.library_items enable row level security;
+alter table public.discussion_messages enable row level security;
+
+-- library_items (update is needed: status changes)
+drop policy if exists "own library select" on public.library_items;
+create policy "own library select" on public.library_items
+  for select to authenticated using ((select auth.uid()) = user_id);
+drop policy if exists "own library insert" on public.library_items;
+create policy "own library insert" on public.library_items
+  for insert to authenticated with check ((select auth.uid()) = user_id);
+drop policy if exists "own library update" on public.library_items;
+create policy "own library update" on public.library_items
+  for update to authenticated
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
+drop policy if exists "own library delete" on public.library_items;
+create policy "own library delete" on public.library_items
+  for delete to authenticated using ((select auth.uid()) = user_id);
+
+-- discussion_messages
+drop policy if exists "own discussion select" on public.discussion_messages;
+create policy "own discussion select" on public.discussion_messages
+  for select to authenticated using ((select auth.uid()) = user_id);
+drop policy if exists "own discussion insert" on public.discussion_messages;
+create policy "own discussion insert" on public.discussion_messages
+  for insert to authenticated with check ((select auth.uid()) = user_id);
+drop policy if exists "own discussion delete" on public.discussion_messages;
+create policy "own discussion delete" on public.discussion_messages
+  for delete to authenticated using ((select auth.uid()) = user_id);
+
+grant select, insert, update, delete on public.library_items to authenticated;
+grant select, insert, delete on public.discussion_messages to authenticated;
+
+-- ============================================================
 -- Seed the allowlist: replace with real emails (owner first!).
 -- ============================================================
 -- insert into public.allowed_emails (email, note) values

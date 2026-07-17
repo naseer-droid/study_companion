@@ -4,11 +4,11 @@ A learning-companion webapp: name a topic → get a brief, roadmap, and resource
 
 ## Status
 <!-- STATUS:START -->
-- **Updated:** 2026-07-11
-- **Phase:** v2 built and verified locally — PWA (installable, offline read-only), invite-only Supabase auth, per-entity storage, mobile UI, live DeepSeek acceptance test passed; awaiting Supabase project + Vercel deploy
-- **Architecture:** Next.js App Router; 3 LLM routes + op-based storage route + keepalive cron route; StorageAdapter with JsonFileStorage (local) / SupabaseStorage (cloud, RLS); middleware auth gate; service worker + manifest
-- **Next:** 📋 Naseer creates the Supabase project, runs supabase/schema.sql, adds env vars, deploys to Vercel (see docs/next-steps.md)
-- **Blocked on:** the human-only steps in docs/next-steps.md (Supabase project, Vercel deploy)
+- **Updated:** 2026-07-17
+- **Phase:** v3.0 "Study Room" built — Library tab per topic (paste article/YouTube links), in-app article reader + YouTube embed, Discuss panel grounded in extracted text/transcripts (feeds shared memory), session greeting strip; v2 deployed and live
+- **Architecture:** Next.js App Router; 5 LLM routes (topic/journal/ask/discuss/greeting) + library ingestion + on-demand content route + op-based storage route + keepalive cron; StorageAdapter with JsonFileStorage (local) / SupabaseStorage (cloud, RLS); middleware auth gate; service worker + manifest; shared UI atoms in components/lamp-ui.tsx
+- **Next:** 📋 Naseer re-runs supabase/schema.sql (new library_items + discussion_messages tables), redeploys, verifies the Study Room in cloud mode (see docs/next-steps.md)
+- **Blocked on:** the human-only steps in docs/next-steps.md (schema re-run, redeploy)
 <!-- STATUS:END -->
 
 ## Commands

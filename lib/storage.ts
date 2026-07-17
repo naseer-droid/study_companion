@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { AppData, Topic, JournalEntry, QAItem, RoadmapStage } from "./types";
+import type { AppData, Topic, JournalEntry, QAItem, RoadmapStage, LibraryItem, DiscussionMsg } from "./types";
 import { supabaseEnabled } from "./supabase/config";
 import { createClient } from "./supabase/server";
 import { LOCAL_USER_ID } from "./auth";
@@ -23,6 +23,24 @@ export interface StorageAdapter {
   ): Promise<void>;
   addQA(userId: string, topicId: string, item: QAItem, memory: string): Promise<void>;
   updateRoadmap(userId: string, topicId: string, roadmap: RoadmapStage[]): Promise<void>;
+  // --- Study Room (v3.0) ---
+  addLibraryItem(
+    userId: string,
+    topicId: string,
+    item: Omit<LibraryItem, "id" | "discussion">,
+    content: string
+  ): Promise<LibraryItem>;
+  getLibraryContent(userId: string, itemId: string): Promise<string>;
+  updateLibraryStatus(userId: string, itemId: string, status: LibraryItem["status"]): Promise<void>;
+  addDiscussion(
+    userId: string,
+    topicId: string,
+    itemId: string,
+    userMsg: DiscussionMsg,
+    companionMsg: DiscussionMsg,
+    memory: string
+  ): Promise<void>;
+  deleteLibraryItem(userId: string, itemId: string): Promise<void>;
   importData(userId: string, data: AppData): Promise<void>;
 }
 
@@ -59,7 +77,19 @@ class JsonFileStorage implements StorageAdapter {
   }
 
   async load(): Promise<AppData> {
-    return this.read();
+    const data = await this.read();
+    // Library content stays on disk only — load() ships item metadata, never
+    // the extracted text (same contract as Supabase mode).
+    return {
+      ...data,
+      topics: data.topics.map((t) => ({
+        ...t,
+        library: (t.library ?? []).map((item) => {
+          const { content: _content, ...meta } = item as LibraryItem & { content?: string };
+          return meta;
+        }),
+      })),
+    };
   }
 
   async createTopic(_userId: string, topic: Omit<Topic, "id">): Promise<Topic> {
@@ -105,6 +135,87 @@ class JsonFileStorage implements StorageAdapter {
     }));
   }
 
+  // --- Study Room (v3.0): content lives inline in the JSON file — fine for a
+  // local single-user store; load() strips it before shipping to the browser.
+  async addLibraryItem(
+    _userId: string,
+    topicId: string,
+    item: Omit<LibraryItem, "id" | "discussion">,
+    content: string
+  ): Promise<LibraryItem> {
+    const created: LibraryItem & { content?: string } = {
+      ...item,
+      id: crypto.randomUUID(),
+      discussion: [],
+      content,
+    };
+    await this.mutate((d) => ({
+      ...d,
+      topics: d.topics.map((t) =>
+        t.id === topicId ? { ...t, library: [...(t.library ?? []), created] } : t
+      ),
+    }));
+    const { content: _content, ...meta } = created;
+    return meta;
+  }
+
+  async getLibraryContent(_userId: string, itemId: string): Promise<string> {
+    const data = await this.read();
+    for (const t of data.topics) {
+      const item = (t.library ?? []).find((i) => i.id === itemId) as
+        | (LibraryItem & { content?: string })
+        | undefined;
+      if (item) return item.content ?? "";
+    }
+    return "";
+  }
+
+  async updateLibraryStatus(_userId: string, itemId: string, status: LibraryItem["status"]): Promise<void> {
+    await this.mutate((d) => ({
+      ...d,
+      topics: d.topics.map((t) => ({
+        ...t,
+        library: (t.library ?? []).map((i) => (i.id === itemId ? { ...i, status } : i)),
+      })),
+    }));
+  }
+
+  async addDiscussion(
+    _userId: string,
+    topicId: string,
+    itemId: string,
+    userMsg: DiscussionMsg,
+    companionMsg: DiscussionMsg,
+    memory: string
+  ): Promise<void> {
+    await this.mutate((d) => ({
+      ...d,
+      topics: d.topics.map((t) =>
+        t.id === topicId
+          ? {
+              ...t,
+              memory,
+              library: (t.library ?? []).map((i) =>
+                i.id === itemId
+                  ? { ...i, discussion: [...i.discussion, userMsg, companionMsg] }
+                  : i
+              ),
+            }
+          : t
+      ),
+    }));
+  }
+
+  async deleteLibraryItem(_userId: string, itemId: string): Promise<void> {
+    await this.mutate((d) => ({
+      ...d,
+      topics: d.topics.map((t) => ({
+        ...t,
+        library: (t.library ?? []).filter((i) => i.id !== itemId),
+      })),
+    }));
+  }
+
   async importData(_userId: string, data: AppData): Promise<void> {
     await this.write(data);
   }
@@ -136,7 +247,7 @@ class SupabaseStorage implements StorageAdapter {
   }
 
   async load(): Promise<AppData> {
-    const [topicsRes, journalRes, questionsRes] = await Promise.all([
+    const [topicsRes, journalRes, questionsRes, libraryRes, discussionRes] = await Promise.all([
       this.supabase
         .from("topics")
         .select("id,name,created_at,brief,why_it_matters,first_step,roadmap,resources,memory,next_suggestion")
@@ -149,10 +260,22 @@ class SupabaseStorage implements StorageAdapter {
         .from("questions")
         .select("topic_id,date,q,a,follow_up")
         .order("date", { ascending: true }),
+      // Metadata only — `content` (extracted text/transcript) is fetched on
+      // demand via getLibraryContent, never shipped in load().
+      this.supabase
+        .from("library_items")
+        .select("id,topic_id,kind,url,title,site_name,thumbnail,status,has_content,added_at")
+        .order("added_at", { ascending: true }),
+      this.supabase
+        .from("discussion_messages")
+        .select("item_id,date,role,text")
+        .order("date", { ascending: true }),
     ]);
     if (topicsRes.error) this.fail("load topics", topicsRes.error);
     if (journalRes.error) this.fail("load journal", journalRes.error);
     if (questionsRes.error) this.fail("load questions", questionsRes.error);
+    if (libraryRes.error) this.fail("load library", libraryRes.error);
+    if (discussionRes.error) this.fail("load discussions", discussionRes.error);
 
     const journalByTopic = new Map<string, JournalEntry[]>();
     for (const row of journalRes.data ?? []) {
@@ -167,6 +290,34 @@ class SupabaseStorage implements StorageAdapter {
       qaByTopic.set(row.topic_id, list);
     }
 
+    // Library items first (with empty threads), then hang each discussion
+    // message on its item — same object, so both maps stay in sync.
+    const libraryByTopic = new Map<string, LibraryItem[]>();
+    const itemById = new Map<string, LibraryItem>();
+    for (const row of libraryRes.data ?? []) {
+      const item: LibraryItem = {
+        id: row.id,
+        kind: row.kind,
+        url: row.url,
+        title: row.title,
+        addedAt: row.added_at,
+        status: row.status,
+        siteName: row.site_name ?? undefined,
+        thumbnail: row.thumbnail ?? undefined,
+        hasContent: row.has_content,
+        discussion: [],
+      };
+      const list = libraryByTopic.get(row.topic_id) ?? [];
+      list.push(item);
+      libraryByTopic.set(row.topic_id, list);
+      itemById.set(row.id, item);
+    }
+    for (const row of discussionRes.data ?? []) {
+      itemById
+        .get(row.item_id)
+        ?.discussion.push({ date: row.date, role: row.role, text: row.text });
+    }
+
     const topics: Topic[] = ((topicsRes.data ?? []) as TopicRow[]).map((row) => ({
       id: row.id,
       name: row.name,
@@ -178,6 +329,7 @@ class SupabaseStorage implements StorageAdapter {
       resources: row.resources ?? [],
       journal: journalByTopic.get(row.id) ?? [],
       qa: qaByTopic.get(row.id) ?? [],
+      library: libraryByTopic.get(row.id) ?? [],
       memory: row.memory,
       nextSuggestion: row.next_suggestion,
     }));
@@ -248,6 +400,83 @@ class SupabaseStorage implements StorageAdapter {
       .update({ memory })
       .eq("id", topicId);
     if (updateError) this.fail("update memory", updateError);
+  }
+
+  async addLibraryItem(
+    userId: string,
+    topicId: string,
+    item: Omit<LibraryItem, "id" | "discussion">,
+    content: string
+  ): Promise<LibraryItem> {
+    const { data, error } = await this.supabase
+      .from("library_items")
+      .insert({
+        user_id: userId,
+        topic_id: topicId,
+        kind: item.kind,
+        url: item.url,
+        title: item.title,
+        site_name: item.siteName ?? null,
+        thumbnail: item.thumbnail ?? null,
+        status: item.status,
+        has_content: item.hasContent,
+        content,
+        added_at: item.addedAt,
+      })
+      .select("id")
+      .single();
+    if (error || !data) this.fail("add library item", error);
+    return { ...item, id: data.id, discussion: [] };
+  }
+
+  async getLibraryContent(_userId: string, itemId: string): Promise<string> {
+    const { data, error } = await this.supabase
+      .from("library_items")
+      .select("content")
+      .eq("id", itemId)
+      .single();
+    if (error) this.fail("load library content", error);
+    return (data?.content as string) ?? "";
+  }
+
+  async updateLibraryStatus(_userId: string, itemId: string, status: LibraryItem["status"]): Promise<void> {
+    const { error } = await this.supabase
+      .from("library_items")
+      .update({ status })
+      .eq("id", itemId);
+    if (error) this.fail("update library status", error);
+  }
+
+  async addDiscussion(
+    userId: string,
+    topicId: string,
+    itemId: string,
+    userMsg: DiscussionMsg,
+    companionMsg: DiscussionMsg,
+    memory: string
+  ): Promise<void> {
+    const { error: insertError } = await this.supabase.from("discussion_messages").insert([
+      { user_id: userId, item_id: itemId, date: userMsg.date, role: userMsg.role, text: userMsg.text },
+      {
+        user_id: userId,
+        item_id: itemId,
+        date: companionMsg.date,
+        role: companionMsg.role,
+        text: companionMsg.text,
+      },
+    ]);
+    if (insertError) this.fail("save discussion", insertError);
+    const { error: updateError } = await this.supabase
+      .from("topics")
+      .update({ memory })
+      .eq("id", topicId);
+    if (updateError) this.fail("update memory", updateError);
+  }
+
+  async deleteLibraryItem(_userId: string, itemId: string): Promise<void> {
+    // Discussion messages cascade in the schema.
+    const { error } = await this.supabase.from("library_items").delete().eq("id", itemId);
+    if (error) this.fail("delete library item", error);
   }
 
   async updateRoadmap(_userId: string, topicId: string, roadmap: RoadmapStage[]): Promise<void> {
