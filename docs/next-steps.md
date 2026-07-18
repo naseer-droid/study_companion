@@ -71,6 +71,46 @@ Things only you can do. Tick them here **and** update the matching line in
   - *Verify:* opens full-screen with the lamp icon; airplane mode still shows
     your topics read-only with the offline banner.
 
+## v3.2 reliable extraction + books — new owner actions (2026-07-18)
+
+Deployed extraction fails because Vercel's datacenter IPs are blocked by
+YouTube/Freedium. v3.2 ships the fixes (background extraction, Jina article
+fallback, Supadata transcript fallback, retry/paste recovery, streamed books)
+— these three steps switch the fallbacks on:
+
+- [ ] **Create a Supadata account and copy the API key** (YouTube transcripts)
+  - *Why only you:* account creation at https://supadata.ai (free tier ≈100
+    videos/month is plenty).
+  - *How:* sign up → dashboard → copy the API key.
+  - Optional: also grab a free key at https://jina.ai (raises the article
+    fallback's rate limits; it works keyless, so this can wait until Medium
+    articles start failing again).
+
+- [ ] **Add the new env vars** to Vercel (all environments) and `.env.local`:
+  ```
+  SUPADATA_API_KEY=<from supadata.ai>
+  JINA_API_KEY=<optional, from jina.ai>
+  ```
+  - *Verify:* redeploy, then add a YouTube link on the deployed app — the card
+    appears instantly, and within ~30s the "no text" badge is gone (poll or
+    reload). Add a Medium link — the reader shows the text.
+
+- [ ] **Re-run `supabase/schema.sql`** in the SQL editor (idempotent — adds
+  `extraction` + `book_source` columns and lets `kind` be `'book'`).
+  - *Verify:* Table Editor → `library_items` shows the two new columns.
+    **Without this step, adding any link on the deployed app will fail.**
+
+- [ ] **Redeploy and spot-check the new features** on your phone:
+  - Add an article → card is instant with an "extracting…" badge that resolves
+    by itself; you can navigate away immediately.
+  - A failed card shows **Retry**; the reader also offers "paste the text
+    yourself" (works for YouTube transcripts via Show transcript → copy).
+  - Select text in the reader → **Discuss this** quotes it into the discussion.
+  - Library "Find more" row → 📚 Books → add a Project Gutenberg book → it
+    reads page-by-page in-app and the companion discusses the page you're on.
+  - A Google Drive ebook (.txt/.epub, shared as "anyone with the link") pasted
+    into the add box becomes a streamed book too — nothing stored in the DB.
+
 ## v3.1 fixes — new owner actions (2026-07-18)
 
 - [ ] **Pull the Vercel function logs for the `/api/library` 500** (Dashboard →

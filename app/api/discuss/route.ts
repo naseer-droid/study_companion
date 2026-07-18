@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { askModel, errorMessage } from "@/lib/llm";
-import { discussPrompt } from "@/lib/prompts";
+import { discussPrompt, discussBookPrompt } from "@/lib/prompts";
 import { discussSchema } from "@/lib/schemas";
 import { getRequestStorage } from "@/lib/storage";
 import type { DiscussionMsg } from "@/lib/types";
@@ -17,7 +17,7 @@ export async function POST(req: Request) {
   if (!ctx) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
 
   try {
-    const { topicId, itemId, message } = await req.json();
+    const { topicId, itemId, message, chunk } = await req.json();
     if (
       typeof topicId !== "string" ||
       typeof itemId !== "string" ||
@@ -34,15 +34,35 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Couldn't find that library item." }, { status: 404 });
     }
 
-    const content = item.hasContent
-      ? (await ctx.storage.getLibraryContent(ctx.userId, itemId)).slice(0, CONTENT_BUDGET)
-      : "";
+    // Books stream — fetch the page the learner has on screen live; stored
+    // content is only for articles/videos. Book fetch failure degrades to
+    // discussing from the title, never an error.
+    let content = "";
+    if (item.kind === "book") {
+      if (item.hasContent && item.bookSource) {
+        try {
+          const { loadBook } = await import("@/lib/books");
+          const book = await loadBook(item.bookSource);
+          const n = Math.min(
+            Math.max(0, typeof chunk === "number" ? Math.trunc(chunk) : 0),
+            book.chunks.length - 1
+          );
+          content = (book.chunks[n] ?? "").slice(0, CONTENT_BUDGET);
+        } catch {
+          // discuss from the title
+        }
+      }
+    } else if (item.hasContent) {
+      content = (await ctx.storage.getLibraryContent(ctx.userId, itemId)).slice(0, CONTENT_BUDGET);
+    }
     const recent = item.discussion
       .slice(-RECENT_TURNS)
       .map((m) => ({ role: m.role, text: m.text }));
 
     const raw = await askModel(
-      discussPrompt(topic.name, topic.memory, item.title, item.kind, content, recent, message.trim())
+      item.kind === "book"
+        ? discussBookPrompt(topic.name, topic.memory, item.title, content, recent, message.trim())
+        : discussPrompt(topic.name, topic.memory, item.title, item.kind, content, recent, message.trim())
     );
     const parsed = discussSchema.safeParse(raw);
     if (!parsed.success) {

@@ -7,6 +7,7 @@ import { supabaseEnabled } from "@/lib/supabase/config";
 import { C, serif, sans, Card, Eyebrow, Btn, Spinner, Linkify } from "./lamp-ui";
 import { readerUrl, searchUrl } from "@/lib/links";
 import Library from "./Library";
+import type { BookPick } from "./BookSearch";
 import ReaderView from "./ReaderView";
 import DiscussPanel from "./DiscussPanel";
 
@@ -104,6 +105,8 @@ export default function StudyLamp() {
   const [error, setError] = useState("");
   const [online, setOnline] = useState(true);
   const [openItemId, setOpenItemId] = useState<string | null>(null);
+  const [quoteSeed, setQuoteSeed] = useState(""); // "Discuss this" passage from the reader
+  const [bookChunk, setBookChunkState] = useState(0); // current page of the open book
   const [greeting, setGreeting] = useState("");
   const [greetingDismissed, setGreetingDismissed] = useState(false);
   const journalEndRef = useRef<HTMLDivElement | null>(null);
@@ -296,6 +299,100 @@ export default function StudyLamp() {
     });
   };
 
+  // A picked book from the in-app search — same route, different body shape.
+  const addBookItem = async (book: BookPick) => {
+    if (!data || !active) return;
+    const { item } = await api<{ item: LibraryItem }>("/api/library", {
+      topicId: active.id,
+      book,
+    });
+    setData({
+      ...data,
+      topics: data.topics.map((t) =>
+        t.id === active.id ? { ...t, library: [...(t.library ?? []), item] } : t
+      ),
+    });
+  };
+
+  // Merge a partial item update into state without touching anything else
+  // (deliberately never the discussion array). Functional form so the poll
+  // interval can't work from a stale snapshot.
+  const mergeItemPatch = (itemId: string, patch: Partial<LibraryItem>) => {
+    setData((d) =>
+      d
+        ? {
+            ...d,
+            topics: d.topics.map((t) => ({
+              ...t,
+              library: (t.library ?? []).map((i) => (i.id === itemId ? { ...i, ...patch } : i)),
+            })),
+          }
+        : d
+    );
+  };
+
+  // While any items are extraction:"pending" (the background job hasn't
+  // landed yet), poll their status. Keyed on the joined id list so the
+  // interval dies naturally once everything is terminal; hard tick cap so a
+  // stuck job can't poll forever.
+  const pendingIds = (active?.library ?? [])
+    .filter((i) => i.extraction === "pending")
+    .map((i) => i.id)
+    .join(",");
+  useEffect(() => {
+    if (!pendingIds || !online) return;
+    let tries = 0;
+    const t = setInterval(async () => {
+      if (++tries > 40) {
+        clearInterval(t);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/library/status?ids=${encodeURIComponent(pendingIds)}`);
+        if (!res.ok) return;
+        const d = await res.json();
+        for (const it of d.items ?? []) {
+          if (it.extraction !== "pending") {
+            mergeItemPatch(it.id, {
+              title: it.title,
+              siteName: it.siteName,
+              thumbnail: it.thumbnail,
+              hasContent: it.hasContent,
+              extraction: it.extraction,
+            });
+          }
+        }
+      } catch {
+        // transient network hiccup — next tick retries
+      }
+    }, 3000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingIds, online]);
+
+  // Re-run extraction for a failed item. Runs inline server-side; the caller
+  // shows its own busy state, so no optimistic "pending" flag here (a poll
+  // tick could race it back to "failed" mid-flight and flicker).
+  const retryExtract = async (itemId: string) => {
+    const { item } = await api<{ item: LibraryItem }>("/api/library/extract", { itemId });
+    mergeItemPatch(itemId, {
+      title: item.title,
+      siteName: item.siteName,
+      thumbnail: item.thumbnail,
+      hasContent: item.hasContent,
+      extraction: item.extraction,
+      bookSource: item.bookSource,
+    });
+    if (item.extraction !== "ok") {
+      throw new Error("Still couldn't get the text — you can paste it yourself below.");
+    }
+  };
+
+  const pasteText = async (itemId: string, text: string) => {
+    await api("/api/library/paste", { itemId, text });
+    mergeItemPatch(itemId, { hasContent: true, extraction: "ok" });
+  };
+
   const setLibraryStatus = async (itemId: string, status: LibraryItem["status"]) => {
     if (!data || !active) return;
     // Optimistic, like toggleStage: update first, reload if the save fails.
@@ -317,8 +414,28 @@ export default function StudyLamp() {
 
   const openLibraryItem = (itemId: string) => {
     setOpenItemId(itemId);
+    setQuoteSeed("");
+    // Books resume where you left off (position lives client-side only).
+    let pos = 0;
+    try {
+      pos = Number(window.localStorage.getItem(`lamp-book-pos-${itemId}`) ?? 0) || 0;
+    } catch {
+      // storage unavailable (private mode) — start at page 1
+    }
+    setBookChunkState(pos);
     const item = (active?.library ?? []).find((i) => i.id === itemId);
     if (item && item.status === "unread" && online) void setLibraryStatus(itemId, "reading");
+  };
+
+  const setBookChunk = (chunk: number) => {
+    setBookChunkState(chunk);
+    if (openItemId) {
+      try {
+        window.localStorage.setItem(`lamp-book-pos-${openItemId}`, String(chunk));
+      } catch {
+        // fine — the position just won't persist
+      }
+    }
   };
 
   const deleteLibraryItem = async (itemId: string) => {
@@ -347,9 +464,16 @@ export default function StudyLamp() {
 
   const sendDiscussion = async (itemId: string, message: string) => {
     if (!data || !active) return;
+    const item = (active.library ?? []).find((i) => i.id === itemId);
     const res = await api<{ userMsg: DiscussionMsg; companionMsg: DiscussionMsg; memory: string }>(
       "/api/discuss",
-      { topicId: active.id, itemId, message }
+      {
+        topicId: active.id,
+        itemId,
+        message,
+        // Books: the companion reads the page currently on screen.
+        ...(item?.kind === "book" ? { chunk: bookChunk } : {}),
+      }
     );
     setData({
       ...data,
@@ -787,8 +911,10 @@ export default function StudyLamp() {
             topic={active}
             online={online}
             onAdd={addLibraryItem}
+            onAddBook={addBookItem}
             onOpen={openLibraryItem}
             onDelete={deleteLibraryItem}
+            onRetry={retryExtract}
           />
         )}
 
@@ -922,13 +1048,22 @@ export default function StudyLamp() {
         {openItem && (
           <ReaderView
             item={openItem}
+            online={online}
             onClose={() => setOpenItemId(null)}
+            onRetry={() => retryExtract(openItem.id)}
+            onPaste={(text) => pasteText(openItem.id, text)}
+            onQuote={setQuoteSeed}
+            bookChunk={bookChunk}
+            onBookChunk={setBookChunk}
             panel={
               <DiscussPanel
                 item={openItem}
                 online={online}
                 onSend={(m) => sendDiscussion(openItem.id, m)}
                 onSetStatus={(s) => setLibraryStatus(openItem.id, s)}
+                onPaste={(text) => pasteText(openItem.id, text)}
+                seedDraft={quoteSeed}
+                onSeedConsumed={() => setQuoteSeed("")}
               />
             }
           />

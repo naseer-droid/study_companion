@@ -32,6 +32,17 @@ export interface StorageAdapter {
   ): Promise<LibraryItem>;
   getLibraryContent(userId: string, itemId: string): Promise<string>;
   updateLibraryStatus(userId: string, itemId: string, status: LibraryItem["status"]): Promise<void>;
+  // v3.2: background extraction patches the item after the add response went
+  // out. `content` (when provided) replaces the stored text. Patching an item
+  // that was deleted mid-flight is a silent no-op.
+  updateLibraryItem(
+    userId: string,
+    itemId: string,
+    patch: Partial<
+      Pick<LibraryItem, "title" | "siteName" | "thumbnail" | "hasContent" | "extraction" | "bookSource">
+    >,
+    content?: string
+  ): Promise<void>;
   addDiscussion(
     userId: string,
     topicId: string,
@@ -180,6 +191,27 @@ class JsonFileStorage implements StorageAdapter {
     }));
   }
 
+  async updateLibraryItem(
+    _userId: string,
+    itemId: string,
+    patch: Partial<
+      Pick<LibraryItem, "title" | "siteName" | "thumbnail" | "hasContent" | "extraction" | "bookSource">
+    >,
+    content?: string
+  ): Promise<void> {
+    await this.mutate((d) => ({
+      ...d,
+      topics: d.topics.map((t) => ({
+        ...t,
+        library: (t.library ?? []).map((i) =>
+          i.id === itemId
+            ? { ...i, ...patch, ...(content !== undefined ? { content } : {}) }
+            : i
+        ),
+      })),
+    }));
+  }
+
   async addDiscussion(
     _userId: string,
     topicId: string,
@@ -264,7 +296,7 @@ class SupabaseStorage implements StorageAdapter {
       // demand via getLibraryContent, never shipped in load().
       this.supabase
         .from("library_items")
-        .select("id,topic_id,kind,url,title,site_name,thumbnail,status,has_content,added_at")
+        .select("id,topic_id,kind,url,title,site_name,thumbnail,status,has_content,extraction,book_source,added_at")
         .order("added_at", { ascending: true }),
       this.supabase
         .from("discussion_messages")
@@ -305,6 +337,8 @@ class SupabaseStorage implements StorageAdapter {
         siteName: row.site_name ?? undefined,
         thumbnail: row.thumbnail ?? undefined,
         hasContent: row.has_content,
+        extraction: row.extraction ?? undefined,
+        bookSource: row.book_source ?? undefined,
         discussion: [],
       };
       const list = libraryByTopic.get(row.topic_id) ?? [];
@@ -420,6 +454,8 @@ class SupabaseStorage implements StorageAdapter {
         thumbnail: item.thumbnail ?? null,
         status: item.status,
         has_content: item.hasContent,
+        extraction: item.extraction ?? null,
+        book_source: item.bookSource ?? null,
         content,
         added_at: item.addedAt,
       })
@@ -445,6 +481,29 @@ class SupabaseStorage implements StorageAdapter {
       .update({ status })
       .eq("id", itemId);
     if (error) this.fail("update library status", error);
+  }
+
+  async updateLibraryItem(
+    _userId: string,
+    itemId: string,
+    patch: Partial<
+      Pick<LibraryItem, "title" | "siteName" | "thumbnail" | "hasContent" | "extraction" | "bookSource">
+    >,
+    content?: string
+  ): Promise<void> {
+    const row: Record<string, unknown> = {};
+    if (patch.title !== undefined) row.title = patch.title;
+    if (patch.siteName !== undefined) row.site_name = patch.siteName;
+    if (patch.thumbnail !== undefined) row.thumbnail = patch.thumbnail;
+    if (patch.hasContent !== undefined) row.has_content = patch.hasContent;
+    if (patch.extraction !== undefined) row.extraction = patch.extraction;
+    if (patch.bookSource !== undefined) row.book_source = patch.bookSource;
+    if (content !== undefined) row.content = content;
+    if (Object.keys(row).length === 0) return;
+    // Matching zero rows (item deleted mid-flight) is fine — only a real
+    // query error should surface.
+    const { error } = await this.supabase.from("library_items").update(row).eq("id", itemId);
+    if (error) this.fail("update library item", error);
   }
 
   async addDiscussion(

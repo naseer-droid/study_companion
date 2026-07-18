@@ -78,6 +78,39 @@ Respond ONLY with valid JSON, no markdown fences, in exactly this shape:
 }`;
 }
 
+// v3.2: books stream chunk-by-chunk, so the companion reads the same page the
+// learner has on screen — a new prompt rather than a change to discussPrompt
+// (frozen contract).
+export function discussBookPrompt(
+  topic: string,
+  memory: string,
+  itemTitle: string,
+  content: string,
+  recentTurns: { role: "user" | "companion"; text: string }[],
+  message: string
+): string {
+  const source = content.trim()
+    ? `You are both currently reading the same part of the book — this passage is on the learner's screen right now:\n"""${content}"""`
+    : `You could not get the book's text, so discuss from its title and what the learner tells you about it — say so honestly if they ask about specifics you can't see.`;
+  const history = recentTurns.length
+    ? recentTurns.map((t) => `${t.role === "user" ? "Learner" : "You"}: ${t.text}`).join("\n")
+    : "(this is the first message about it)";
+  return `You are a learning companion who is learning "${topic}" ALONGSIDE the learner, as a curious co-learner (not a lecturer).
+Shared memory of everything learned together so far:
+"""${memory || "Nothing yet."}"""
+You are reading this book together: "${itemTitle}".
+${source}
+The discussion about it so far:
+"""${history}"""
+The learner says:
+"""${message}"""
+Respond ONLY with valid JSON, no markdown fences, in exactly this shape:
+{
+ "reply": "2-4 warm sentences as a co-learner: engage with what they said, reference the passage specifically when you can, and add ONE insight, connection, or genuine question of your own. Gently correct any clear misconception.",
+ "updatedMemory": "rewrite the running shared memory to include the key takeaway from this discussion; a compact summary under 130 words of everything learned together so far"
+}`;
+}
+
 export function greetingPrompt(
   topic: string,
   memory: string,

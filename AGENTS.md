@@ -32,3 +32,4 @@ A learning-companion webapp: name a topic → get a brief, roadmap, and resource
 - Why v2 is shaped this way (hosting choice, auth, schema, market research, roadmap) → `docs/v2-design-and-research.md`
 - Naseer needs the human-only to-do list (Supabase setup, email templates, deploy, data import) → `docs/next-steps.md`
 - Touching Supabase schema/auth/RLS → `supabase/schema.sql` is the single source of truth; re-run it in the SQL editor after edits (it's idempotent)
+- Portable reference for reusing the K3 LLM layer + library scraping pipeline in another project → `docs/k3-llm-and-scraping-reference.md`

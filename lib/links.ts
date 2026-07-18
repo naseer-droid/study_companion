@@ -45,3 +45,8 @@ export function readerUrl(url: string): string {
 export function searchUrl(query: string): string {
   return `https://www.google.com/search?q=${encodeURIComponent(query)}`;
 }
+
+// v3.2 "find more" chips in the library.
+export function youtubeSearchUrl(query: string): string {
+  return `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+}

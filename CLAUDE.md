@@ -5,10 +5,10 @@ A learning-companion webapp: name a topic → get a brief, roadmap, and resource
 ## Status
 <!-- STATUS:START -->
 - **Updated:** 2026-07-18
-- **Phase:** v3.1 — deployed /api/library 500 hardened (lazy jsdom/transcript imports, guaranteed JSON errors), resources clickable (model URL + search fallback), companion text linkified with Medium→Freedium everywhere; verified end-to-end locally
-- **Architecture:** Next.js App Router; 5 LLM routes (topic/journal/ask/discuss/greeting) + library ingestion + on-demand content route + op-based storage route + keepalive cron; StorageAdapter with JsonFileStorage (local) / SupabaseStorage (cloud, RLS); middleware auth gate; service worker + manifest; shared UI atoms in components/lamp-ui.tsx; shared link helpers in lib/links.ts
-- **Next:** 📋 Naseer pulls Vercel logs for the old /api/library 500 (confirm root cause), redeploys, re-tests adding Medium + YouTube links on the deployed app (see docs/next-steps.md)
-- **Blocked on:** the human-only steps in docs/next-steps.md (Vercel logs, deployed re-test)
+- **Phase:** v3.2 — background (non-blocking) library ingestion via after(), extraction fallbacks for Vercel's blocked datacenter IPs (Jina Reader for articles, Supadata for YouTube transcripts), retry + paste-text recovery, discuss-a-selection, library search/filters, "find more" chips, and streamed books (Gutenberg in-app reader, Open Library links, Drive .txt/.epub — no book text stored); verified end-to-end locally incl. Gutenberg paging + quote-to-discuss
+- **Architecture:** Next.js App Router; 5 LLM routes (topic/journal/ask/discuss/greeting) + library routes (ingest / content / extract-retry / paste / status / book-chunks) + op-based storage route + keepalive cron; shared extraction pipeline in lib/extract.ts, book streaming in lib/books.ts; StorageAdapter with JsonFileStorage (local) / SupabaseStorage (cloud, RLS); middleware auth gate; service worker (v3) + manifest; UI atoms in components/lamp-ui.tsx; link helpers in lib/links.ts
+- **Next:** 📋 Naseer creates the Supadata key, adds SUPADATA_API_KEY (+ optional JINA_API_KEY) to Vercel, re-runs supabase/schema.sql, redeploys, re-tests Medium + YouTube + a Gutenberg book on the phone (see docs/next-steps.md → v3.2)
+- **Blocked on:** the human-only v3.2 steps in docs/next-steps.md (Supadata account, Vercel env vars, schema re-run, redeploy)
 <!-- STATUS:END -->
 
 ## Commands

@@ -165,16 +165,30 @@ create table if not exists public.library_items (
   id uuid primary key default gen_random_uuid(),
   topic_id uuid not null references public.topics (id) on delete cascade,
   user_id uuid not null references auth.users (id) on delete cascade,
-  kind text not null check (kind in ('article', 'youtube')),
+  kind text not null check (kind in ('article', 'youtube', 'book')),
   url text not null,
   title text not null default '',
   site_name text,
   thumbnail text,
   status text not null default 'unread' check (status in ('unread', 'reading', 'done')),
   has_content boolean not null default false,
+  extraction text check (extraction is null or extraction in ('pending', 'ok', 'failed')),
+  book_source jsonb,
   content text not null default '',
   added_at timestamptz not null default now()
 );
+
+-- v3.2 migration for databases created before books/background extraction.
+-- Idempotent: add-column-if-missing, and drop/re-add the kind check (inline
+-- checks get the auto-name library_items_kind_check) to admit 'book'.
+alter table public.library_items add column if not exists extraction text;
+alter table public.library_items add column if not exists book_source jsonb;
+alter table public.library_items drop constraint if exists library_items_kind_check;
+alter table public.library_items add constraint library_items_kind_check
+  check (kind in ('article', 'youtube', 'book'));
+alter table public.library_items drop constraint if exists library_items_extraction_check;
+alter table public.library_items add constraint library_items_extraction_check
+  check (extraction is null or extraction in ('pending', 'ok', 'failed'));
 
 create table if not exists public.discussion_messages (
   id uuid primary key default gen_random_uuid(),
