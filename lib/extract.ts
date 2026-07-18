@@ -103,10 +103,36 @@ async function transcriptViaSupadata(videoId: string): Promise<string> {
   }
 }
 
+// Fetching user-supplied URLs server-side is the product feature here, but it
+// must never become a bridge to internal addresses (matters most when
+// self-hosted rather than on Vercel). Cheap SSRF guard: http(s) only, and no
+// loopback/link-local/private hosts.
+export function assertPublicHttpUrl(url: string): void {
+  const u = new URL(url);
+  if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("unsupported URL scheme");
+  const host = u.hostname.toLowerCase().replace(/\.$/, "").replace(/^\[|\]$/g, "");
+  if (
+    host === "localhost" ||
+    host === "0.0.0.0" ||
+    host === "::" ||
+    host === "::1" ||
+    host.endsWith(".local") ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    /^169\.254\./.test(host) ||
+    /^f[cde]/.test(host) // fc00::/7 + fe80::/10 IPv6 literals
+  ) {
+    throw new Error("that address can't be fetched");
+  }
+}
+
 // Attempt 1: fetch + Readability, exactly as v3.0/3.1 did. jsdom/Readability
 // load lazily so a packaging failure surfaces as a thrown error (→ fallback),
 // not a dead route module.
 async function articleViaDirectFetch(url: string): Promise<Extracted> {
+  assertPublicHttpUrl(url);
   const [{ JSDOM }, { Readability }] = await Promise.all([
     import("jsdom"),
     import("@mozilla/readability"),

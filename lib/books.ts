@@ -45,11 +45,19 @@ export async function fetchDriveFile(
     const html = await first.text();
     const action = html.match(/<form[^>]+action="([^"]+)"/)?.[1];
     if (!action) throw new Error("drive file is not link-shared (or was removed)");
-    const params = new URLSearchParams();
+    // The form action comes out of HTML we fetched — only follow it back into
+    // Google's own domains (SSRF guard on attacker-shaped interstitials).
+    const next = new URL(action.replace(/&amp;/g, "&"), "https://drive.google.com");
+    const nextHost = next.hostname.toLowerCase().replace(/\.$/, "");
+    if (next.protocol !== "https:" || (nextHost !== "google.com" && !nextHost.endsWith(".google.com"))) {
+      throw new Error("unexpected drive redirect");
+    }
+    const params = new URLSearchParams(next.search);
     for (const input of html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)"/g)) {
       params.set(input[1], input[2]);
     }
-    res = await fetch(`${action.replace(/&amp;/g, "&")}?${params.toString()}`, {
+    next.search = params.toString();
+    res = await fetch(next, {
       redirect: "follow",
       signal: AbortSignal.timeout(30_000),
     });
@@ -209,6 +217,16 @@ export async function loadBook(src: BookSource): Promise<{ chunks: string[]; tit
   let value: { chunks: string[]; title?: string };
   if (src.provider === "gutenberg") {
     if (!src.textUrl) throw new Error("this book has no readable text");
+    // The add route already pins textUrl to gutenberg.org; re-check here so a
+    // value that reached storage any other way still can't make the server
+    // fetch an arbitrary URL (SSRF defense-in-depth).
+    const textHost = new URL(src.textUrl).hostname.toLowerCase().replace(/\.$/, "");
+    if (
+      new URL(src.textUrl).protocol !== "https:" ||
+      (textHost !== "gutenberg.org" && !textHost.endsWith(".gutenberg.org"))
+    ) {
+      throw new Error("this book has no readable text");
+    }
     const res = await fetch(src.textUrl, { signal: AbortSignal.timeout(30_000) });
     if (!res.ok) throw new Error(`gutenberg returned ${res.status}`);
     let text = await res.text();
