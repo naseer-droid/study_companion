@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { LibraryItem } from "@/lib/types";
-import { C, serif, sans, Btn, Spinner, Eyebrow } from "./lamp-ui";
+import { C, serif, sans, Btn, Spinner, Eyebrow, Linkify } from "./lamp-ui";
 
 // Chat with the companion about one library item. Messages are owned by the
 // parent; each exchange also rewrites the topic's shared memory server-side.
@@ -105,7 +105,7 @@ export default function DiscussPanel({
                 fontFamily: m.role === "user" ? sans : serif,
               }}
             >
-              {m.text}
+              <Linkify text={m.text} />
             </div>
           </div>
         ))}

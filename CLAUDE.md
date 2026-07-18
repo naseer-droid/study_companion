@@ -4,11 +4,11 @@ A learning-companion webapp: name a topic → get a brief, roadmap, and resource
 
 ## Status
 <!-- STATUS:START -->
-- **Updated:** 2026-07-17
-- **Phase:** v3.0 "Study Room" built — Library tab per topic (paste article/YouTube links), in-app article reader + YouTube embed, Discuss panel grounded in extracted text/transcripts (feeds shared memory), session greeting strip; v2 deployed and live
-- **Architecture:** Next.js App Router; 5 LLM routes (topic/journal/ask/discuss/greeting) + library ingestion + on-demand content route + op-based storage route + keepalive cron; StorageAdapter with JsonFileStorage (local) / SupabaseStorage (cloud, RLS); middleware auth gate; service worker + manifest; shared UI atoms in components/lamp-ui.tsx
-- **Next:** 📋 Naseer re-runs supabase/schema.sql (new library_items + discussion_messages tables), redeploys, verifies the Study Room in cloud mode (see docs/next-steps.md)
-- **Blocked on:** the human-only steps in docs/next-steps.md (schema re-run, redeploy)
+- **Updated:** 2026-07-18
+- **Phase:** v3.1 — deployed /api/library 500 hardened (lazy jsdom/transcript imports, guaranteed JSON errors), resources clickable (model URL + search fallback), companion text linkified with Medium→Freedium everywhere; verified end-to-end locally
+- **Architecture:** Next.js App Router; 5 LLM routes (topic/journal/ask/discuss/greeting) + library ingestion + on-demand content route + op-based storage route + keepalive cron; StorageAdapter with JsonFileStorage (local) / SupabaseStorage (cloud, RLS); middleware auth gate; service worker + manifest; shared UI atoms in components/lamp-ui.tsx; shared link helpers in lib/links.ts
+- **Next:** 📋 Naseer pulls Vercel logs for the old /api/library 500 (confirm root cause), redeploys, re-tests adding Medium + YouTube links on the deployed app (see docs/next-steps.md)
+- **Blocked on:** the human-only steps in docs/next-steps.md (Vercel logs, deployed re-test)
 <!-- STATUS:END -->
 
 ## Commands

@@ -1,6 +1,7 @@
 "use client";
 
 import { CSSProperties, ReactNode } from "react";
+import { readerUrl } from "@/lib/links";
 
 // Shared atoms for the Study Lamp UI — extracted from StudyLamp.tsx so the
 // Study Room components (Library/ReaderView/DiscussPanel) use the exact same
@@ -93,6 +94,48 @@ export function Btn({
       {children}
     </button>
   );
+}
+
+// Companion text with URLs as tappable links. Handles markdown [title](url)
+// (models emit it even when asked for plain text) and bare https://… /
+// www.… URLs; no other markdown. Medium links open via the freedium mirror.
+const LINK_RE =
+  /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>()"']+|www\.[a-z0-9-]+(?:\.[a-z0-9-]+)+[^\s<>()"']*)/gi;
+
+export function Linkify({ text }: { text: string }) {
+  const nodes: ReactNode[] = [];
+  const re = new RegExp(LINK_RE); // local lastIndex — the module regex is shared
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+    let label: string;
+    let url: string;
+    if (m[1] && m[2]) {
+      label = m[1];
+      url = m[2];
+    } else {
+      // Trailing punctuation belongs to the sentence, not the URL.
+      url = m[3].replace(/[.,;:!?]+$/, "");
+      label = url;
+    }
+    const href = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+    nodes.push(
+      <a
+        key={m.index}
+        href={readerUrl(href)}
+        target="_blank"
+        rel="noreferrer"
+        style={{ color: C.amber, textDecoration: "underline", textUnderlineOffset: 3 }}
+      >
+        {label}
+      </a>
+    );
+    last = m.index + (m[1] ? m[0].length : url.length);
+  }
+  if (nodes.length === 0) return <>{text}</>;
+  if (last < text.length) nodes.push(text.slice(last));
+  return <>{nodes}</>;
 }
 
 export function Spinner({ label }: { label: string }) {

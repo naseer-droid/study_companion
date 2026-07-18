@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
-import { JSDOM } from "jsdom";
-import { Readability } from "@mozilla/readability";
-import { YoutubeTranscript } from "youtube-transcript";
 import { getRequestStorage } from "@/lib/storage";
+import { isMediumUrl, readerUrl } from "@/lib/links";
 import type { LibraryItem } from "@/lib/types";
 
 // Ingestion: paste a URL → we fetch metadata + readable text/transcript and
@@ -59,9 +57,13 @@ async function fetchYouTube(url: string, videoId: string): Promise<Extracted> {
   // Hard 15s budget: from datacenter IPs YouTube often HANGS rather than
   // refuses, and an unbounded wait gets the serverless function killed —
   // the client then receives an HTML error page it can't read.
+  // The parser loads lazily inside the race: if the package can't load in
+  // this deployment, we lose the transcript, not the whole function.
   let content = "";
   const parts = await Promise.race([
-    YoutubeTranscript.fetchTranscript(videoId).catch(() => null),
+    import("youtube-transcript")
+      .then(({ YoutubeTranscript }) => YoutubeTranscript.fetchTranscript(videoId))
+      .catch(() => null),
     new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000)),
   ]);
   if (parts) {
@@ -76,6 +78,13 @@ async function fetchYouTube(url: string, videoId: string): Promise<Extracted> {
 }
 
 async function fetchArticle(url: string): Promise<Extracted> {
+  // jsdom/Readability load lazily so a packaging failure surfaces as this
+  // function throwing (→ link-only card in POST's catch) instead of the whole
+  // route module dying and returning a bodyless 500.
+  const [{ JSDOM }, { Readability }] = await Promise.all([
+    import("jsdom"),
+    import("@mozilla/readability"),
+  ]);
   const res = await fetch(url, {
     headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml,*/*" },
     redirect: "follow",
@@ -101,20 +110,18 @@ async function fetchArticle(url: string): Promise<Extracted> {
   };
 }
 
-// Medium articles are paywalled for most readers; the freedium mirror serves
-// the same text openly. Rewrite at ingestion and store the mirror URL, so the
-// reader's "Original" link also opens the readable version.
-const FREEDIUM_MIRROR = "https://freedium-mirror.cfd";
-
-function maybeMirrorMedium(u: URL): { url: string; mirrored: boolean } {
-  const host = u.hostname.replace(/^www\./, "");
-  if (host === "medium.com" || host.endsWith(".medium.com")) {
-    return { url: `${FREEDIUM_MIRROR}/${u.toString()}`, mirrored: true };
+export async function POST(req: Request) {
+  // Outer catch: no path may return a bodyless 500 — the client can only
+  // show a useful error when the body is JSON.
+  try {
+    return await handleAdd(req);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Could not add that link.";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
-  return { url: u.toString(), mirrored: false };
 }
 
-export async function POST(req: Request) {
+async function handleAdd(req: Request) {
   const ctx = await getRequestStorage();
   if (!ctx) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
 
@@ -136,7 +143,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "That doesn't look like a valid URL." }, { status: 400 });
   }
 
-  const { url: effectiveUrl, mirrored } = maybeMirrorMedium(parsed);
+  // Medium is rewritten to the freedium mirror at ingestion, so the stored
+  // URL (and the reader's "Original" link) opens the readable version.
+  const mirrored = isMediumUrl(parsed.toString());
+  const effectiveUrl = readerUrl(parsed.toString());
   const videoId = youtubeVideoId(parsed);
   const kind: LibraryItem["kind"] = videoId ? "youtube" : "article";
   let extracted: Extracted;
@@ -149,7 +159,11 @@ export async function POST(req: Request) {
       content: "",
     };
   }
-  if (mirrored) extracted.siteName = "Medium";
+  if (mirrored) {
+    extracted.siteName = "Medium";
+    // The mirror suffixes its own name onto page titles.
+    extracted.title = extracted.title.replace(/\s*[-–|]\s*Freedium\s*$/i, "");
+  }
 
   // Shorter than this is usually a paywall/JS-wall stub, not real content.
   const hasContent = extracted.content.length > 200;

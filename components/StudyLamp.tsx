@@ -4,7 +4,8 @@ import { useState, useEffect, useRef, CSSProperties } from "react";
 import type { AppData, Topic, LibraryItem, DiscussionMsg } from "@/lib/types";
 import type { TopicSetupResponse, JournalResponse, AskResponse } from "@/lib/schemas";
 import { supabaseEnabled } from "@/lib/supabase/config";
-import { C, serif, sans, Card, Eyebrow, Btn, Spinner } from "./lamp-ui";
+import { C, serif, sans, Card, Eyebrow, Btn, Spinner, Linkify } from "./lamp-ui";
+import { readerUrl, searchUrl } from "@/lib/links";
 import Library from "./Library";
 import ReaderView from "./ReaderView";
 import DiscussPanel from "./DiscussPanel";
@@ -606,7 +607,7 @@ export default function StudyLamp() {
             }}
           >
             <div style={{ flex: 1, fontFamily: serif, fontSize: 14, lineHeight: 1.6 }}>
-              {greeting}
+              <Linkify text={greeting} />
             </div>
             <button
               onClick={() => setGreetingDismissed(true)}
@@ -694,7 +695,19 @@ export default function StudyLamp() {
                     }}
                   >
                     <div style={{ fontSize: 15, fontWeight: 600 }}>
-                      {r.title}{" "}
+                      <a
+                        href={r.url ? readerUrl(r.url) : searchUrl(`${r.title} ${active.name}`)}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{
+                          color: C.ink,
+                          textDecoration: "underline",
+                          textDecorationColor: C.amber,
+                          textUnderlineOffset: 3,
+                        }}
+                      >
+                        {r.title} ↗
+                      </a>{" "}
                       <span
                         style={{
                           fontSize: 11,
@@ -823,7 +836,9 @@ export default function StudyLamp() {
             {[...qaList].reverse().map((item, i) => (
               <Card key={i}>
                 <div style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.5 }}>{item.q}</div>
-                <div style={{ marginTop: 10, fontSize: 15, lineHeight: 1.65, fontFamily: serif }}>{item.a}</div>
+                <div style={{ marginTop: 10, fontSize: 15, lineHeight: 1.65, fontFamily: serif }}>
+                  <Linkify text={item.a} />
+                </div>
                 {item.followUp && (
                   <div
                     onClick={() => setAskText(item.followUp)}
@@ -864,7 +879,9 @@ export default function StudyLamp() {
                 </Card>
                 <Card style={{ borderRadius: "14px 14px 4px 14px", borderColor: "#3A4560", background: C.panel2 }}>
                   <div style={{ fontSize: 12, color: C.amber, marginBottom: 5 }}>Companion</div>
-                  <div style={{ fontSize: 15, lineHeight: 1.6, fontFamily: serif }}>{e.companionReply}</div>
+                  <div style={{ fontSize: 15, lineHeight: 1.6, fontFamily: serif }}>
+                    <Linkify text={e.companionReply} />
+                  </div>
                 </Card>
               </div>
             ))}

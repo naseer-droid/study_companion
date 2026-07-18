@@ -4,6 +4,7 @@ export type Resource = {
   title: string;
   type: "book" | "course" | "website" | "video" | "practice";
   why: string;
+  url?: string; // model-provided when confident; absent on pre-v3.1 topics
 };
 
 export type RoadmapStage = {

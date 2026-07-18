@@ -8,6 +8,20 @@ const resourceType = z
     ["book", "course", "website", "video", "practice"].includes(t) ? t : "website"
   );
 
+// Models hallucinate URLs; keep one only when it at least parses as http(s).
+const resourceUrl = z
+  .string()
+  .optional()
+  .transform((u) => {
+    if (!u) return undefined;
+    try {
+      const parsed = new URL(u);
+      return parsed.protocol === "http:" || parsed.protocol === "https:" ? u : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+
 export const topicSetupSchema = z.object({
   brief: z.string(),
   whyItMatters: z.string().default(""),
@@ -20,6 +34,7 @@ export const topicSetupSchema = z.object({
         title: z.string(),
         type: resourceType,
         why: z.string().default(""),
+        url: resourceUrl,
       })
     )
     .default([]),

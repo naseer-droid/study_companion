@@ -7,7 +7,7 @@ Respond ONLY with valid JSON, no markdown fences, no preamble, in exactly this s
  "brief": "3-4 sentence plain-language overview of the topic for a beginner",
  "whyItMatters": "1-2 sentences on why this is worth learning",
  "roadmap": [ { "title": "short stage name", "desc": "1 sentence on what to learn/do in this stage" } ],
- "resources": [ { "title": "real, well-known resource name (book, site, course, channel)", "type": "book|course|website|video|practice", "why": "1 short sentence on why it helps" } ],
+ "resources": [ { "title": "real, well-known resource name (book, site, course, channel)", "type": "book|course|website|video|practice", "why": "1 short sentence on why it helps", "url": "the resource's real canonical URL - include ONLY if you are confident it is correct, otherwise omit this field" } ],
  "firstStep": "one small concrete thing the learner can do today (under 30 minutes)"
 }
 Give 5-7 roadmap stages ordered from beginner to capable, and 4-5 genuinely well-known real resources.`;

@@ -71,6 +71,24 @@ Things only you can do. Tick them here **and** update the matching line in
   - *Verify:* opens full-screen with the lamp icon; airplane mode still shows
     your topics read-only with the offline banner.
 
+## v3.1 fixes — new owner actions (2026-07-18)
+
+- [ ] **Pull the Vercel function logs for the `/api/library` 500** (Dashboard →
+  project → Logs, filter `/api/library`) and paste what the function logged
+  into a Claude session.
+  - *Why only you:* the Vercel integration connected to Claude sees no
+    projects — the deployment lives under a different login.
+  - *Context:* v3.1 hardened the route (lazy-loads jsdom/youtube-transcript,
+    guaranteed JSON errors), which fixes the most likely cause (module-load
+    crash) — the logs confirm whether anything else was going on.
+
+- [ ] **Redeploy** (auto if the Vercel project is GitHub-connected — the fix is
+  pushed to `main`) and re-test: open a topic → Library → add a Medium link and
+  a YouTube link.
+  - *Verify:* both cards appear; the Medium card's stored URL starts with
+    `https://freedium-mirror.cfd/`; if it still fails, the error message is now
+    specific instead of "couldn't reach the companion (error 500)" — paste it.
+
 ## v3.0 Study Room — new owner actions (2026-07-17)
 
 - [ ] **Re-run `supabase/schema.sql`** in the SQL editor (idempotent) — adds the
