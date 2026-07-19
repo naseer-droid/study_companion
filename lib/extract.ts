@@ -103,10 +103,25 @@ const cleanCue = (s: string) =>
 // HANGS rather than refuses. Lazy import so a packaging failure costs the
 // transcript, not the function.
 async function transcriptViaScrape(videoId: string): Promise<string> {
-  const parts = await Promise.race([
+  // fetchTranscript picks captionTracks[0] when no lang is given, which can be
+  // a translated/non-English track. Prefer English variants, then fall back to
+  // the default track so a genuinely non-English video still yields something.
+  // (Requesting a missing lang throws, hence the try-each cascade.)
+  const fetchParts = (lang?: string) =>
     import("youtube-transcript")
-      .then(({ YoutubeTranscript }) => YoutubeTranscript.fetchTranscript(videoId))
-      .catch(() => null),
+      .then(({ YoutubeTranscript }) =>
+        YoutubeTranscript.fetchTranscript(videoId, lang ? { lang } : undefined)
+      )
+      .catch(() => null);
+  const preferred = (async () => {
+    for (const lang of ["en", "en-US", "en-GB", undefined]) {
+      const p = await fetchParts(lang);
+      if (p && p.length) return p;
+    }
+    return null;
+  })();
+  const parts = await Promise.race([
+    preferred,
     new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000)),
   ]);
   if (!parts) return "";
@@ -124,7 +139,7 @@ async function transcriptViaSupadata(videoId: string): Promise<string> {
   if (!key) return "";
   try {
     const res = await fetch(
-      `https://api.supadata.ai/v1/youtube/transcript?videoId=${encodeURIComponent(videoId)}`,
+      `https://api.supadata.ai/v1/youtube/transcript?videoId=${encodeURIComponent(videoId)}&lang=en`,
       { headers: { "x-api-key": key }, signal: AbortSignal.timeout(15_000) }
     );
     if (!res.ok) return "";
