@@ -10,7 +10,7 @@
 // reputation (Jina Reader / Supadata) has to do the fetch.
 
 import type { StorageAdapter } from "./storage";
-import type { LibraryItem } from "./types";
+import type { LibraryItem, TranscriptSegment } from "./types";
 import { FREEDIUM_MIRROR } from "./links";
 
 export const HAS_CONTENT_MIN = 200; // shorter is usually a paywall/JS-wall stub
@@ -64,6 +64,40 @@ export async function quickYouTubeMeta(
   return { title, siteName, thumbnail };
 }
 
+// v3.4: transcripts are stored as JSON segments ({ t: seconds, text }) so the
+// reader can render tappable timestamps. buildTranscript normalizes raw cue
+// offsets to seconds — the youtube-transcript package returns ms on its
+// InnerTube path but seconds on its classic-caption path, and Supadata returns
+// ms, so we detect the unit from the median gap between cues (real cues are a
+// few seconds apart; a median gap over 100 means the values are milliseconds).
+function buildTranscript(raw: { o: number; text: string }[]): string {
+  const cues = raw.filter((r) => r.text);
+  if (!cues.length) return "";
+  const gaps: number[] = [];
+  for (let i = 1; i < cues.length; i++) {
+    const g = cues[i].o - cues[i - 1].o;
+    if (g > 0) gaps.push(g);
+  }
+  gaps.sort((a, b) => a - b);
+  const median = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0;
+  const isMs = median > 100;
+  const segs: TranscriptSegment[] = cues.map((r) => ({
+    t: Math.max(0, Math.floor(isMs ? r.o / 1000 : r.o)),
+    text: r.text,
+  }));
+  // Keep the serialized transcript under CONTENT_CAP by dropping trailing
+  // segments (a >100KB transcript means a multi-hour video).
+  let json = JSON.stringify(segs);
+  while (json.length > CONTENT_CAP && segs.length > 1) {
+    segs.splice(Math.floor(segs.length * 0.9));
+    json = JSON.stringify(segs);
+  }
+  return json;
+}
+
+const cleanCue = (s: string) =>
+  s.replace(/\[.*?\]/g, " ").replace(/\s+/g, " ").trim(); // drop [Music]-style markers
+
 // Attempt 1: scrape the watch-page caption tracks (works from residential
 // IPs / local dev). Hard 15s budget — from datacenter IPs YouTube often
 // HANGS rather than refuses. Lazy import so a packaging failure costs the
@@ -76,28 +110,35 @@ async function transcriptViaScrape(videoId: string): Promise<string> {
     new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000)),
   ]);
   if (!parts) return "";
-  return parts
-    .map((p) => p.text)
-    .join(" ")
-    .replace(/\[.*?\]/g, " ") // drop [Music]-style markers
-    .replace(/\s+/g, " ")
-    .trim();
+  return buildTranscript(
+    parts.map((p) => ({ o: Number(p.offset ?? 0), text: cleanCue(String(p.text ?? "")) }))
+  );
 }
 
 // Attempt 2: Supadata (residential-proxy transcript API; free tier).
-// GET /v1/youtube/transcript?videoId=&text=true → { content: string };
-// 206 means "video has no transcript" — a real answer, not an error.
+// GET /v1/youtube/transcript?videoId= → { content: [{ text, offset, duration }] };
+// 206 means "video has no transcript" — a real answer, not an error. We omit
+// text=true so the response carries per-cue offsets for the timestamped reader.
 async function transcriptViaSupadata(videoId: string): Promise<string> {
   const key = process.env.SUPADATA_API_KEY;
   if (!key) return "";
   try {
     const res = await fetch(
-      `https://api.supadata.ai/v1/youtube/transcript?videoId=${encodeURIComponent(videoId)}&text=true`,
+      `https://api.supadata.ai/v1/youtube/transcript?videoId=${encodeURIComponent(videoId)}`,
       { headers: { "x-api-key": key }, signal: AbortSignal.timeout(15_000) }
     );
     if (!res.ok) return "";
     const data = await res.json();
-    return typeof data.content === "string" ? data.content.replace(/\s+/g, " ").trim() : "";
+    if (Array.isArray(data.content)) {
+      return buildTranscript(
+        data.content.map((c: { text?: unknown; offset?: unknown }) => ({
+          o: Number(c.offset ?? 0),
+          text: cleanCue(String(c.text ?? "")),
+        }))
+      );
+    }
+    // Fallback: some responses return a flat string (no per-cue timing).
+    return typeof data.content === "string" ? cleanCue(data.content) : "";
   } catch {
     return "";
   }
@@ -128,6 +169,111 @@ export function assertPublicHttpUrl(url: string): void {
   }
 }
 
+// v3.4 rich reader: store the article as sanitized HTML so the in-app reader
+// keeps headings, lists, blockquotes and images instead of a flat wall of
+// text. Sanitization is the security boundary (the reader renders this with
+// dangerouslySetInnerHTML), so it is a strict allow-list: unknown tags are
+// unwrapped, dangerous tags dropped, every attribute stripped except safe
+// href/src/alt, and all URLs resolved to absolute http(s). Images are
+// hotlinked by URL — no bytes are ever stored, so DB size is unchanged.
+type JSDOMCtor = (typeof import("jsdom"))["JSDOM"];
+
+const ARTICLE_ALLOWED_TAGS = new Set([
+  "P", "BR", "HR", "H1", "H2", "H3", "H4", "H5", "H6", "UL", "OL", "LI",
+  "BLOCKQUOTE", "PRE", "CODE", "A", "IMG", "FIGURE", "FIGCAPTION", "STRONG",
+  "EM", "B", "I", "U", "S", "SUP", "SUB", "MARK", "SPAN", "DIV", "SECTION",
+  "ARTICLE", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD",
+]);
+const ARTICLE_DROP_TAGS = new Set([
+  "SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "FORM", "LINK", "META",
+  "NOSCRIPT", "SVG", "CANVAS", "INPUT", "BUTTON", "SELECT", "TEXTAREA",
+  "VIDEO", "AUDIO", "HEAD", "TITLE",
+]);
+const ARTICLE_ALLOWED_ATTR: Record<string, Set<string>> = {
+  A: new Set(["href"]),
+};
+
+function absoluteHttpUrl(raw: string, baseUrl: string): string {
+  try {
+    const abs = new URL(raw, baseUrl);
+    return abs.protocol === "http:" || abs.protocol === "https:" ? abs.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function sanitizeArticleHtml(html: string, baseUrl: string, JSDOM: JSDOMCtor): string {
+  const doc = new JSDOM(`<!DOCTYPE html><body>${html}</body>`, { url: baseUrl }).window.document;
+  const body = doc.body;
+
+  const clean = (node: Node) => {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === 3) continue; // text node — keep
+      if (child.nodeType !== 1) {
+        child.parentNode?.removeChild(child); // comments etc.
+        continue;
+      }
+      const el = child as unknown as Element;
+      const tag = el.tagName.toUpperCase();
+      if (ARTICLE_DROP_TAGS.has(tag)) {
+        el.remove();
+        continue;
+      }
+      clean(el); // depth-first so unwrapping preserves already-cleaned children
+      if (!ARTICLE_ALLOWED_TAGS.has(tag)) {
+        const parent = el.parentNode;
+        if (parent) {
+          while (el.firstChild) parent.insertBefore(el.firstChild, el);
+          parent.removeChild(el);
+        }
+        continue;
+      }
+      if (tag === "IMG") {
+        // Lazy-loaded images hide the real URL in data-* / srcset; grab it
+        // before wiping attributes, then keep only a resolved src + alt.
+        const cand =
+          el.getAttribute("data-src") ||
+          el.getAttribute("data-original") ||
+          el.getAttribute("data-lazy-src") ||
+          el.getAttribute("src") ||
+          (el.getAttribute("srcset") || "").split(",")[0]?.trim().split(/\s+/)[0] ||
+          "";
+        const alt = el.getAttribute("alt") || "";
+        const src = cand ? absoluteHttpUrl(cand, baseUrl) : "";
+        for (const attr of Array.from(el.attributes)) el.removeAttribute(attr.name);
+        if (!src) {
+          el.remove();
+          continue;
+        }
+        el.setAttribute("src", src);
+        if (alt) el.setAttribute("alt", alt);
+        el.setAttribute("loading", "lazy");
+        continue;
+      }
+      const allowed = ARTICLE_ALLOWED_ATTR[tag];
+      for (const attr of Array.from(el.attributes)) {
+        const name = attr.name.toLowerCase();
+        if (name.startsWith("on") || !allowed || !allowed.has(name)) el.removeAttribute(attr.name);
+      }
+      if (tag === "A") {
+        const safe = absoluteHttpUrl(el.getAttribute("href") || "", baseUrl);
+        if (safe) {
+          el.setAttribute("href", safe);
+          el.setAttribute("target", "_blank");
+          el.setAttribute("rel", "noreferrer");
+        } else {
+          el.removeAttribute("href");
+        }
+      }
+    }
+  };
+  clean(body);
+
+  // Truncate at block boundaries so a stored article never ends mid-tag.
+  while (body.lastChild && body.innerHTML.length > CONTENT_CAP) body.removeChild(body.lastChild);
+  return body.innerHTML.trim();
+}
+
 // Attempt 1: fetch + Readability, exactly as v3.0/3.1 did. jsdom/Readability
 // load lazily so a packaging failure surfaces as a thrown error (→ fallback),
 // not a dead route module.
@@ -154,11 +300,18 @@ async function articleViaDirectFetch(url: string): Promise<Extracted> {
 
   const article = new Readability(doc).parse();
   const host = new URL(url).hostname.replace(/^www\./, "");
+  const textLen = (article?.textContent ?? "").trim().length;
+  // Rich HTML when the body is substantial; otherwise plain text, which stays
+  // below HAS_CONTENT_MIN and lets the Jina fallback take over (unchanged flow).
+  const content =
+    article?.content && textLen > HAS_CONTENT_MIN
+      ? sanitizeArticleHtml(article.content, url, JSDOM)
+      : (article?.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim();
   return {
     title: (article?.title || doc.title || host).trim(),
     siteName: article?.siteName || og("og:site_name") || host,
     thumbnail: og("og:image"),
-    content: (article?.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim(),
+    content,
   };
 }
 

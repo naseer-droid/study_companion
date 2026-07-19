@@ -6,6 +6,7 @@
 
 import type { StorageAdapter } from "./storage";
 import type { BookSource, LibraryItem } from "./types";
+import { assertPublicHttpUrl, UA } from "./extract";
 
 export const BOOK_CHUNK = 18_000; // chars per reader "page"
 const DRIVE_CAP = 25_000_000; // bytes — parsing happens in memory
@@ -74,6 +75,65 @@ export async function fetchDriveFile(
     disposition.match(/filename\*=UTF-8''([^;]+)/)?.[1] ??
     disposition.match(/filename="([^"]+)"/)?.[1];
   return { bytes, filename: filename ? decodeURIComponent(filename) : undefined };
+}
+
+// ---------------------------------------------------------------------------
+// Generic public URL (v3.4): a .txt/.epub file the learner supplies —
+// Standard Ebooks, archive.org public-domain, or self-hosted. The SSRF guard
+// (http/https + public IPs only, re-checked on every redirect hop) is the
+// security boundary; nothing is stored, capped at the same 25MB as Drive.
+// ---------------------------------------------------------------------------
+// Fetch a URL following 3xx redirects manually — re-validating every hop so a
+// redirect can't bounce the fetch to a private address (archive.org, for one,
+// redirects downloads to a CDN node).
+async function fetchFollowing(url: string): Promise<Response> {
+  let current = url;
+  for (let hop = 0; hop < 6; hop++) {
+    assertPublicHttpUrl(current);
+    const res = await fetch(current, {
+      redirect: "manual",
+      headers: { "user-agent": UA, accept: "*/*" },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location");
+      if (!loc) return res;
+      current = new URL(loc, current).toString();
+      continue;
+    }
+    return res;
+  }
+  throw new Error("too many redirects");
+}
+
+async function readCapped(res: Response): Promise<Uint8Array> {
+  const length = Number(res.headers.get("content-length") ?? 0);
+  if (length > DRIVE_CAP) throw new Error("ebook too large (25MB max)");
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (bytes.byteLength > DRIVE_CAP) throw new Error("ebook too large (25MB max)");
+  return bytes;
+}
+
+export async function fetchRemoteFile(url: string): Promise<Uint8Array> {
+  let res = await fetchFollowing(url);
+  if (!res.ok) throw new Error(`source returned ${res.status}`);
+  let bytes = await readCapped(res);
+  // Some hosts serve an HTML "your download has started" interstitial with a
+  // <meta http-equiv="refresh"> to the real file (Standard Ebooks does this).
+  // Follow that once, re-validating the target.
+  const ctype = res.headers.get("content-type") || "";
+  if (sniffFormat(bytes) !== "epub" && /html|xml/i.test(ctype)) {
+    const meta = decodeText(bytes).match(
+      /http-equiv=["']refresh["'][^>]*content=["'][^"']*url=([^"'>\s]+)/i
+    );
+    if (meta) {
+      const next = new URL(meta[1].replace(/&amp;/g, "&"), url).toString();
+      res = await fetchFollowing(next);
+      if (!res.ok) throw new Error(`source returned ${res.status}`);
+      bytes = await readCapped(res);
+    }
+  }
+  return bytes;
 }
 
 function sniffFormat(bytes: Uint8Array): "epub" | "txt" {
@@ -244,6 +304,15 @@ export async function loadBook(src: BookSource): Promise<{ chunks: string[]; tit
     } else {
       value = { chunks: chunkPlainText(decodeText(bytes)), title: filename };
     }
+  } else if (src.provider === "remote") {
+    if (!src.textUrl) throw new Error("this book has no readable text");
+    const bytes = await fetchRemoteFile(src.textUrl);
+    if (sniffFormat(bytes) === "epub") {
+      const { chapters, title } = await epubChapters(bytes);
+      value = { chunks: chunkChapters(chapters), title };
+    } else {
+      value = { chunks: chunkPlainText(decodeText(bytes)) };
+    }
   } else {
     throw new Error("this book has no readable text"); // openlibrary: link-only
   }
@@ -262,19 +331,43 @@ export async function retryBookProbe(
   userId: string,
   item: LibraryItem
 ): Promise<Partial<Pick<LibraryItem, "title" | "hasContent" | "extraction" | "bookSource">>> {
-  if (item.bookSource?.provider !== "drive") {
+  const provider = item.bookSource?.provider;
+  if (provider !== "drive" && provider !== "remote") {
     // Nothing to probe for gutenberg/openlibrary — they're terminal at add.
     return { extraction: extractionTerminal(item) };
   }
+  // Generic public URL: open it once to confirm it streams and learn the title
+  // (epub only; a .txt keeps the filename-derived title). Stores no text.
+  if (provider === "remote") {
+    try {
+      const { title } = await loadBook(item.bookSource!);
+      const patch = {
+        ...(title ? { title } : {}),
+        hasContent: true,
+        extraction: "ok" as const,
+      };
+      await storage.updateLibraryItem(userId, item.id, patch);
+      return patch;
+    } catch {
+      const patch = { extraction: "failed" as const };
+      try {
+        await storage.updateLibraryItem(userId, item.id, patch);
+      } catch {
+        // storage briefly unavailable — stays pending until the next retry
+      }
+      return patch;
+    }
+  }
+  const drive = item.bookSource!; // narrowed: provider === "drive" here
   try {
-    const { bytes, filename } = await fetchDriveFile(item.bookSource.ref);
+    const { bytes, filename } = await fetchDriveFile(drive.ref);
     const format = sniffFormat(bytes);
     let title = filename?.replace(/\.(txt|epub)$/i, "");
     if (format === "epub") {
       const parsed = await epubChapters(bytes); // throws if unreadable
       title = parsed.title ?? title;
       memo = {
-        key: `drive:${item.bookSource.ref}`,
+        key: `drive:${drive.ref}`,
         value: { chunks: chunkChapters(parsed.chapters), title },
       };
     }
@@ -282,7 +375,7 @@ export async function retryBookProbe(
       ...(title ? { title } : {}),
       hasContent: true,
       extraction: "ok" as const,
-      bookSource: { ...item.bookSource, format },
+      bookSource: { ...drive, format },
     };
     await storage.updateLibraryItem(userId, item.id, patch);
     return patch;

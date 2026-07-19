@@ -43,10 +43,10 @@ export type DiscussionMsg = {
 // store. `ref` is the provider-native id (Gutenberg numeric id, Open Library
 // work key, Drive file id).
 export type BookSource = {
-  provider: "gutenberg" | "openlibrary" | "drive";
+  provider: "gutenberg" | "openlibrary" | "drive" | "remote";
   ref: string;
-  format?: "txt" | "epub"; // drive only; probed in the background after add
-  textUrl?: string; // gutenberg: plain-text URL chosen at add time
+  format?: "txt" | "epub"; // drive/remote only; probed in the background after add
+  textUrl?: string; // gutenberg/remote: plain-text or .epub URL fetched server-side
 };
 
 export type LibraryItem = {
@@ -69,6 +69,63 @@ export type LibraryItem = {
 // reads go through this, never item.extraction directly.
 export function extractionState(item: LibraryItem): "pending" | "ok" | "failed" {
   return item.extraction ?? (item.hasContent ? "ok" : "failed");
+}
+
+// --- v3.4: transcript + article content shapes ---
+// YouTube transcripts are now stored as JSON segments so the reader can show
+// tappable timestamps; pre-v3.4 items hold a plain joined string. Every
+// consumer (reader, discuss route) must handle BOTH shapes, so these pure
+// helpers live here (client- and server-safe) rather than in the server-only
+// extraction module.
+export type TranscriptSegment = { t: number; text: string }; // t = seconds
+
+export function parseTranscript(content: string): TranscriptSegment[] | null {
+  if (!content || content[0] !== "[") return null; // legacy plain text / empty
+  try {
+    const arr = JSON.parse(content);
+    if (
+      Array.isArray(arr) &&
+      arr.length > 0 &&
+      arr.every((s) => s && typeof s.t === "number" && typeof s.text === "string")
+    ) {
+      return arr as TranscriptSegment[];
+    }
+  } catch {
+    // not JSON — a legacy plain-text transcript
+  }
+  return null;
+}
+
+// Flatten stored transcript content to plain text (for the LLM / copy / legacy).
+export function transcriptToText(content: string): string {
+  const segs = parseTranscript(content);
+  return segs ? segs.map((s) => s.text).join(" ") : content;
+}
+
+// Articles are stored as sanitized HTML (rich reader) when extraction is strong,
+// or plain/markdown text (Jina fallback). Detect the HTML case for rendering,
+// and strip tags when feeding the model.
+export function looksLikeHtml(content: string): boolean {
+  return (
+    /^\s*<(?:p|h[1-6]|div|ul|ol|figure|blockquote|article|section|img|table|pre)\b/i.test(content) ||
+    /<\/(?:p|h[1-6]|li|blockquote)>/i.test(content)
+  );
+}
+
+export function stripHtml(html: string): string {
+  return html
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<\/(p|div|h[1-6]|li|blockquote|figure|tr|br)\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 export type Topic = {

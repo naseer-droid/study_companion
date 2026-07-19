@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { after } from "next/server";
 import { getRequestStorage } from "@/lib/storage";
 import { readerUrl } from "@/lib/links";
-import { youtubeVideoId, quickYouTubeMeta, extractAndStore } from "@/lib/extract";
+import { youtubeVideoId, quickYouTubeMeta, extractAndStore, assertPublicHttpUrl } from "@/lib/extract";
 import { driveFileId, retryBookProbe } from "@/lib/books";
 import type { BookSource } from "@/lib/types";
 
@@ -70,6 +70,41 @@ async function handleAdd(req: Request) {
         hasContent: false,
         extraction: "pending",
         bookSource: { provider: "drive", ref: driveId },
+      },
+      ""
+    );
+    after(async () => {
+      await retryBookProbe(ctx.storage, ctx.userId, item);
+    });
+    return NextResponse.json({ item });
+  }
+
+  // A public .txt/.epub URL (Standard Ebooks, archive.org public-domain, or
+  // self-hosted) becomes a streamed book like Drive: saved instantly, opened
+  // by a background probe. The SSRF guard refuses private/loopback addresses;
+  // no book text is ever stored.
+  const lowerPath = parsed.pathname.toLowerCase();
+  if (lowerPath.endsWith(".epub") || lowerPath.endsWith(".txt")) {
+    try {
+      assertPublicHttpUrl(parsed.toString());
+    } catch {
+      return NextResponse.json({ error: "That address can't be fetched." }, { status: 400 });
+    }
+    const format: "txt" | "epub" = lowerPath.endsWith(".epub") ? "epub" : "txt";
+    const rawName = decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || "Ebook");
+    const item = await ctx.storage.addLibraryItem(
+      ctx.userId,
+      topicId,
+      {
+        kind: "book",
+        url: parsed.toString(),
+        title: rawName.replace(/\.(txt|epub)$/i, "").replace(/[-_]+/g, " ").trim() || "Ebook",
+        addedAt: new Date().toISOString(),
+        status: "unread",
+        siteName: parsed.hostname.replace(/^www\./, ""),
+        hasContent: false,
+        extraction: "pending",
+        bookSource: { provider: "remote", ref: parsed.toString(), format, textUrl: parsed.toString() },
       },
       ""
     );

@@ -1,6 +1,6 @@
 // Study Lamp service worker — app-shell caching + read-only offline data.
 // Bump VERSION on any change to this file to invalidate old caches.
-const VERSION = "v3"; // v3.2: background extraction, books, recovery UX
+const VERSION = "v4"; // v3.4: visible transcripts, rich article reader, remote books, new mic
 const CACHE = `study-lamp-${VERSION}`;
 
 self.addEventListener("install", (event) => {

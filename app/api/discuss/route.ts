@@ -4,6 +4,7 @@ import { discussPrompt, discussBookPrompt } from "@/lib/prompts";
 import { discussSchema } from "@/lib/schemas";
 import { getRequestStorage } from "@/lib/storage";
 import type { DiscussionMsg } from "@/lib/types";
+import { transcriptToText, looksLikeHtml, stripHtml } from "@/lib/types";
 
 // Discuss a library item with the companion. Needs storage (item content +
 // memory + persistence), so unlike /api/ask this route is authed directly.
@@ -53,7 +54,17 @@ export async function POST(req: Request) {
         }
       }
     } else if (item.hasContent) {
-      content = (await ctx.storage.getLibraryContent(ctx.userId, itemId)).slice(0, CONTENT_BUDGET);
+      // Stored content may be transcript segments (youtube) or sanitized HTML
+      // (articles) — flatten to plain text BEFORE budgeting, so slicing never
+      // cuts through JSON/markup.
+      const raw = await ctx.storage.getLibraryContent(ctx.userId, itemId);
+      const text =
+        item.kind === "youtube"
+          ? transcriptToText(raw)
+          : looksLikeHtml(raw)
+            ? stripHtml(raw)
+            : raw;
+      content = text.slice(0, CONTENT_BUDGET);
     }
     const recent = item.discussion
       .slice(-RECENT_TURNS)

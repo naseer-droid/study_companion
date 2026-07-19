@@ -2,8 +2,159 @@
 
 import { ReactNode, useEffect, useRef, useState } from "react";
 import type { LibraryItem } from "@/lib/types";
-import { extractionState } from "@/lib/types";
+import { extractionState, parseTranscript, looksLikeHtml } from "@/lib/types";
+import { FREEDIUM_MIRROR } from "@/lib/links";
 import { C, serif, sans, Btn, Spinner } from "./lamp-ui";
+
+// Compact A−/A+ font-size control in the reader header.
+function fontBtn(disabled: boolean): React.CSSProperties {
+  return {
+    background: "transparent",
+    border: `1px solid ${C.line}`,
+    borderRadius: 8,
+    color: C.dim,
+    cursor: disabled ? "default" : "pointer",
+    opacity: disabled ? 0.4 : 1,
+    fontFamily: sans,
+    fontSize: 13,
+    fontWeight: 700,
+    padding: "6px 9px",
+  };
+}
+
+// mm:ss (or h:mm:ss) for transcript timestamps.
+function fmtTime(t: number): string {
+  const s = Math.max(0, Math.floor(t));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
+  return `${h > 0 ? `${h}:` : ""}${mm}:${String(sec).padStart(2, "0")}`;
+}
+
+// v3.4: the stored transcript, shown to the learner. Segment transcripts render
+// as tappable rows that seek the player; legacy plain-text transcripts render
+// as one searchable block. Collapsed by default so the video stays the focus.
+function TranscriptPanel({
+  content,
+  onSeek,
+}: {
+  content: string;
+  onSeek: (t: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [copied, setCopied] = useState(false);
+  const segments = parseTranscript(content);
+  const plain = segments ? segments.map((s) => s.text).join(" ") : content;
+  const query = q.trim().toLowerCase();
+  const rows = segments
+    ? query
+      ? segments.filter((s) => s.text.toLowerCase().includes(query))
+      : segments
+    : [];
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(plain);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard blocked — no-op
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 16, borderTop: `1px solid ${C.line}`, paddingTop: 12, fontFamily: sans }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          background: "none",
+          border: "none",
+          color: C.dim,
+          fontFamily: sans,
+          fontSize: 13,
+          fontWeight: 600,
+          cursor: "pointer",
+          padding: 0,
+        }}
+      >
+        Transcript {open ? "▾" : "▸"}
+      </button>
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search the transcript…"
+              style={{
+                flex: 1,
+                minWidth: 0,
+                background: C.bg,
+                border: `1px solid ${C.line}`,
+                borderRadius: 10,
+                padding: "8px 12px",
+                color: C.ink,
+                fontSize: 16, // ≥16px stops iOS Safari zooming the field on focus
+                fontFamily: sans,
+                outline: "none",
+              }}
+            />
+            <Btn variant="ghost" onClick={copy} style={{ padding: "8px 12px", fontSize: 13, flexShrink: 0 }}>
+              {copied ? "Copied" : "Copy"}
+            </Btn>
+          </div>
+          {segments ? (
+            <div style={{ maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+              {rows.length === 0 ? (
+                <div style={{ color: C.dim, fontSize: 13, padding: "6px 2px" }}>No lines match.</div>
+              ) : (
+                rows.map((s, i) => (
+                  <button
+                    key={`${s.t}-${i}`}
+                    onClick={() => onSeek(s.t)}
+                    style={{
+                      display: "flex",
+                      gap: 10,
+                      alignItems: "baseline",
+                      textAlign: "left",
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      padding: "6px 4px",
+                      borderRadius: 6,
+                      color: C.ink,
+                      fontFamily: sans,
+                    }}
+                  >
+                    <span style={{ color: C.amber, fontVariantNumeric: "tabular-nums", fontSize: 12, flexShrink: 0, minWidth: 48 }}>
+                      {fmtTime(s.t)}
+                    </span>
+                    <span style={{ fontSize: 14, lineHeight: 1.55 }}>{s.text}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          ) : (
+            <div
+              style={{
+                maxHeight: 320,
+                overflowY: "auto",
+                whiteSpace: "pre-wrap",
+                color: C.ink,
+                fontSize: 14,
+                lineHeight: 1.6,
+              }}
+            >
+              {plain}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function youtubeEmbed(url: string): { id: string; start: number } | null {
   try {
@@ -183,15 +334,53 @@ export default function ReaderView({
   const [bookLoading, setBookLoading] = useState(false);
   const [bookError, setBookError] = useState("");
   const [pill, setPill] = useState<{ top: number; left: number; text: string } | null>(null);
+  const [seekTime, setSeekTime] = useState<number | null>(null); // transcript → player seek
+  const [mode, setMode] = useState<"reader" | "original">("reader"); // Freedium embed toggle
+  const [fontScale, setFontScale] = useState(1);
   const articleRef = useRef<HTMLElement | null>(null);
+  const mainRef = useRef<HTMLDivElement | null>(null);
 
   const ext = extractionState(item);
+  // Medium items were rewritten to the Freedium mirror at ingestion, so their
+  // stored URL is embeddable (Medium itself sets X-Frame-Options); offer to
+  // view the real page inline. Non-mirror articles keep only "Original ↗".
+  const canEmbedOriginal = item.kind === "article" && item.url.startsWith(`${FREEDIUM_MIRROR}/`);
+  const showReaderControls = item.kind === "article" || item.kind === "book";
 
-  // Article text is fetched on demand — load() never ships it. Keyed on
-  // hasContent so a successful retry/paste triggers the fetch by itself.
+  // Reader font size persists across items/sessions (client-side only).
   useEffect(() => {
-    if (item.kind !== "article" || !item.hasContent) return;
+    try {
+      const saved = Number(window.localStorage.getItem("lamp-reader-fontsize"));
+      if (saved >= 0.8 && saved <= 1.6) setFontScale(saved);
+    } catch {
+      // storage unavailable — keep default
+    }
+  }, []);
+  const changeFont = (delta: number) => {
+    setFontScale((v) => {
+      const next = Math.min(1.6, Math.max(0.8, Math.round((v + delta) * 100) / 100));
+      try {
+        window.localStorage.setItem("lamp-reader-fontsize", String(next));
+      } catch {
+        // fine — just won't persist
+      }
+      return next;
+    });
+  };
+
+  // A new item resets the transient view state (seek target, embed toggle).
+  useEffect(() => {
+    setSeekTime(null);
+    setMode("reader");
+  }, [item.id]);
+
+  // Article text / video transcript are fetched on demand — load() never ships
+  // them. Keyed on hasContent so a successful retry/paste triggers the fetch by
+  // itself. (v3.4: transcripts are now shown, so YouTube fetches content too.)
+  useEffect(() => {
+    if ((item.kind !== "article" && item.kind !== "youtube") || !item.hasContent) return;
     let cancelled = false;
+    setContent(null);
     setLoading(true);
     fetch(`/api/library/content?itemId=${encodeURIComponent(item.id)}`)
       .then((r) => (r.ok ? r.json() : null))
@@ -208,6 +397,21 @@ export default function ReaderView({
       cancelled = true;
     };
   }, [item.id, item.kind, item.hasContent]);
+
+  // Articles resume where you left off (scroll position lives client-side only,
+  // mirroring the book page-position behaviour).
+  useEffect(() => {
+    if (item.kind !== "article" || content === null) return;
+    const main = mainRef.current;
+    if (!main) return;
+    let pos = 0;
+    try {
+      pos = Number(window.localStorage.getItem(`lamp-article-pos-${item.id}`) ?? 0) || 0;
+    } catch {
+      // storage unavailable — start at the top
+    }
+    if (pos > 0) requestAnimationFrame(() => main.scrollTo({ top: pos }));
+  }, [item.id, item.kind, content]);
 
   // Books stream one chunk at a time — nothing is stored, so every page turn
   // asks the server to resolve the source live.
@@ -282,16 +486,30 @@ export default function ReaderView({
 
   const embed = item.kind === "youtube" ? youtubeEmbed(item.url) : null;
 
+  const onMainScroll = () => {
+    setPill(null);
+    const main = mainRef.current;
+    if (main && item.kind === "article") {
+      try {
+        window.localStorage.setItem(`lamp-article-pos-${item.id}`, String(Math.round(main.scrollTop)));
+      } catch {
+        // fine — position just won't persist
+      }
+    }
+  };
+
   const articleStyle: React.CSSProperties = {
     maxWidth: "65ch",
     margin: "0 auto",
     padding: "24px 20px 64px",
     fontFamily: serif,
-    fontSize: 18,
+    fontSize: 18 * fontScale,
     lineHeight: 1.75,
     color: C.ink,
     whiteSpace: "pre-wrap",
   };
+  // Rendered HTML flows as normal markup (headings/lists/images), not pre-wrap.
+  const htmlArticleStyle: React.CSSProperties = { ...articleStyle, whiteSpace: "normal" };
 
   return (
     <div
@@ -338,6 +556,37 @@ export default function ReaderView({
             Log what I learned
           </Btn>
         )}
+        {canEmbedOriginal && (
+          <Btn
+            variant="ghost"
+            onClick={() => setMode((m) => (m === "reader" ? "original" : "reader"))}
+            style={{ padding: "8px 12px", fontSize: 13, flexShrink: 0 }}
+          >
+            {mode === "reader" ? "Original page" : "Reader"}
+          </Btn>
+        )}
+        {showReaderControls && mode === "reader" && (
+          <div style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
+            <button
+              onClick={() => changeFont(-0.1)}
+              disabled={fontScale <= 0.8}
+              aria-label="Smaller text"
+              title="Smaller text"
+              style={fontBtn(fontScale <= 0.8)}
+            >
+              A−
+            </button>
+            <button
+              onClick={() => changeFont(0.1)}
+              disabled={fontScale >= 1.6}
+              aria-label="Larger text"
+              title="Larger text"
+              style={fontBtn(fontScale >= 1.6)}
+            >
+              A+
+            </button>
+          </div>
+        )}
         <a
           href={item.url}
           target="_blank"
@@ -349,7 +598,7 @@ export default function ReaderView({
       </header>
 
       <div className="lc-reader-body">
-        <div className="lc-reader-main" onScroll={() => setPill(null)}>
+        <div ref={mainRef} className="lc-reader-main" onScroll={onMainScroll}>
           {item.kind === "youtube" ? (
             <div style={{ maxWidth: 860, margin: "0 auto", padding: 16 }}>
               {embed ? (
@@ -363,7 +612,12 @@ export default function ReaderView({
                   }}
                 >
                   <iframe
-                    src={`https://www.youtube.com/embed/${embed.id}${embed.start ? `?start=${embed.start}` : ""}`}
+                    // Remount on seek so a tapped timestamp starts the player
+                    // at that moment (start= only applies on load).
+                    key={seekTime ?? "base"}
+                    src={`https://www.youtube.com/embed/${embed.id}?start=${
+                      seekTime ?? embed.start
+                    }${seekTime != null ? "&autoplay=1" : ""}`}
                     title={item.title}
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                     allowFullScreen
@@ -389,11 +643,19 @@ export default function ReaderView({
                 }}
               >
                 {item.hasContent
-                  ? "The companion has the transcript — open the discussion and talk about what you just watched."
+                  ? "The companion has the transcript — read it below (tap a time to jump the video), or open the discussion to talk about what you watched."
                   : ext === "pending"
                     ? "Still fetching the transcript in the background — you can start watching."
                     : "No transcript was available for this one, but the companion can still discuss it from the title and your account."}
               </div>
+              {item.hasContent && content && (
+                <TranscriptPanel content={content} onSeek={setSeekTime} />
+              )}
+              {item.hasContent && content === null && loading && (
+                <div style={{ marginTop: 14 }}>
+                  <Spinner label="Loading the transcript…" />
+                </div>
+              )}
               {ext === "failed" && !item.hasContent && (
                 <RecoveryBox kind="youtube" online={online} onRetry={onRetry} onPaste={onPaste} />
               )}
@@ -458,14 +720,43 @@ export default function ReaderView({
                 </article>
               )}
             </div>
+          ) : canEmbedOriginal && mode === "original" ? (
+            <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+              <div
+                style={{
+                  padding: "8px 16px",
+                  color: C.dim,
+                  fontSize: 12,
+                  fontFamily: sans,
+                  borderBottom: `1px solid ${C.line}`,
+                }}
+              >
+                Viewing the original page. Switch to <strong style={{ color: C.ink }}>Reader</strong> to
+                select text and discuss it.
+              </div>
+              <iframe
+                src={item.url}
+                title={item.title}
+                style={{ flex: 1, width: "100%", minHeight: "82vh", border: 0, background: "#fff" }}
+              />
+            </div>
           ) : loading ? (
             <div style={{ padding: 40, display: "flex", justifyContent: "center" }}>
               <Spinner label="Laying out the article..." />
             </div>
           ) : content ? (
-            <article ref={articleRef} style={articleStyle}>
-              {content}
-            </article>
+            looksLikeHtml(content) ? (
+              <article
+                ref={articleRef}
+                className="lc-article-html"
+                style={htmlArticleStyle}
+                dangerouslySetInnerHTML={{ __html: content }}
+              />
+            ) : (
+              <article ref={articleRef} style={articleStyle}>
+                {content}
+              </article>
+            )
           ) : (
             <div
               style={{

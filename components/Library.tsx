@@ -147,7 +147,7 @@ export default function Library({
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && add()}
-            placeholder="Paste an article, YouTube or Drive-ebook link..."
+            placeholder="Paste an article, YouTube, Drive or .epub/.txt book link..."
             style={{
               flex: 1,
               minWidth: 0,
@@ -173,8 +173,9 @@ export default function Library({
         {error && <div style={{ marginTop: 10, color: C.danger, fontSize: 13 }}>{error}</div>}
         <div style={{ marginTop: 10, fontSize: 12, color: C.dim, lineHeight: 1.5 }}>
           The card appears right away; pulling out the text keeps working in the background, so
-          feel free to move on. Articles open in a clean reader, videos play right here, books read
-          page by page — the companion reads along either way.
+          feel free to move on. Articles open in a clean reader, videos play right here (with the
+          transcript), books read page by page — including Google Drive or public .epub/.txt links.
+          The companion reads along either way.
         </div>
 
         <div style={{ marginTop: 12, borderTop: `1px solid ${C.line}`, paddingTop: 10 }}>
