@@ -111,6 +111,71 @@ Respond ONLY with valid JSON, no markdown fences, in exactly this shape:
 }`;
 }
 
+// ---------------------------------------------------------------------------
+// v3.3 Living Companion — NEW contracts, additive. Same memory-rewrite
+// discipline; the frozen three above stay untouched.
+// ---------------------------------------------------------------------------
+
+// Teach-back: the companion asks the learner to explain something back.
+// `seedNote` (an old journal excerpt) lets the review chip target a specific
+// memory; without it the model picks whatever seems worth checking.
+export function quizPrompt(topic: string, memory: string, seedNote?: string): string {
+  const focus = seedNote?.trim()
+    ? `A while back the learner wrote this journal entry — build your question around it:\n"""${seedNote}"""`
+    : `Pick ONE thing from the shared memory that seems worth checking they've really got.`;
+  return `You are a learning companion who is learning "${topic}" ALONGSIDE the learner. Right now you're gently checking understanding — like a friend saying "explain it to me", never like an exam.
+Shared memory of everything learned together so far:
+"""${memory || "Nothing yet."}"""
+${focus}
+Respond ONLY with valid JSON, no markdown fences, in exactly this shape:
+{
+ "question": "one friendly teach-back question asking the learner to explain that thing in their own words; conversational, one sentence or two, no multiple choice"
+}`;
+}
+
+export function quizFeedbackPrompt(
+  topic: string,
+  memory: string,
+  question: string,
+  answer: string
+): string {
+  return `You are a learning companion who is learning "${topic}" ALONGSIDE the learner. You asked them to explain something in their own words, and they just answered — respond like a warm friend, not a grader.
+Shared memory of everything learned together so far:
+"""${memory || "Nothing yet."}"""
+Your question was:
+"""${question}"""
+The learner answered:
+"""${answer}"""
+Respond ONLY with valid JSON, no markdown fences, in exactly this shape:
+{
+ "feedback": "2-4 warm sentences: affirm what they explained well, gently fill in or correct ONE thing if needed, and add a small encouraging note as a co-learner",
+ "updatedMemory": "rewrite the running shared memory to note this was reviewed and how solid it felt; a compact summary under 130 words of everything learned together so far"
+}`;
+}
+
+// Progress check: after a journal entry, does it show a roadmap stage is done?
+// Fired non-blocking after the entry saves; suggestions only — the learner
+// confirms in the UI, the app never silently marks stages.
+export function progressPrompt(
+  topic: string,
+  roadmap: { id: number; title: string; desc: string; done: boolean }[],
+  entryText: string
+): string {
+  const stages = roadmap
+    .filter((s) => !s.done)
+    .map((s) => `${s.id}: "${s.title}" — ${s.desc}`)
+    .join("\n");
+  return `You are a learning companion tracking a learner's progress through a roadmap for "${topic}".
+The stages NOT yet marked done:
+${stages || "(none — all stages are done)"}
+The learner just wrote this journal entry:
+"""${entryText}"""
+Respond ONLY with valid JSON, no markdown fences, in exactly this shape:
+{
+ "completedStageIds": [ids of stages this entry clearly shows the learner has completed or confidently understands - usually an empty array; only include a stage when the evidence is strong]
+}`;
+}
+
 export function greetingPrompt(
   topic: string,
   memory: string,

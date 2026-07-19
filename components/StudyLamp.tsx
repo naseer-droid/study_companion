@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, CSSProperties } from "react";
-import type { AppData, Topic, LibraryItem, DiscussionMsg } from "@/lib/types";
+import type { AppData, Topic, LibraryItem, DiscussionMsg, RoadmapStage } from "@/lib/types";
 import type { TopicSetupResponse, JournalResponse, AskResponse } from "@/lib/schemas";
 import { supabaseEnabled } from "@/lib/supabase/config";
 import { C, serif, sans, Card, Eyebrow, Btn, Spinner, Linkify } from "./lamp-ui";
@@ -10,6 +10,8 @@ import Library from "./Library";
 import type { BookPick } from "./BookSearch";
 import ReaderView from "./ReaderView";
 import DiscussPanel from "./DiscussPanel";
+import FocusSession from "./FocusSession";
+import MicButton from "./MicButton";
 
 // ---------- server calls ----------
 async function api<T>(path: string, body: unknown): Promise<T> {
@@ -109,6 +111,16 @@ export default function StudyLamp() {
   const [bookChunk, setBookChunkState] = useState(0); // current page of the open book
   const [greeting, setGreeting] = useState("");
   const [greetingDismissed, setGreetingDismissed] = useState(false);
+  // v3.3 teach-back quiz: idle → loading (fetching question) → asked (awaiting
+  // the learner's answer) → grading (fetching feedback, then back to idle —
+  // the exchange lands in the journal feed).
+  const [quiz, setQuiz] = useState<{ phase: "idle" | "loading" | "asked" | "grading"; question: string }>({
+    phase: "idle",
+    question: "",
+  });
+  const [quizAnswer, setQuizAnswer] = useState("");
+  const [reviewDismissed, setReviewDismissed] = useState(false);
+  const [focusOpen, setFocusOpen] = useState(false);
   const journalEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -136,6 +148,10 @@ export default function StudyLamp() {
   useEffect(() => {
     setGreeting("");
     setGreetingDismissed(false);
+    setReviewDismissed(false);
+    setQuiz({ phase: "idle", question: "" });
+    setQuizAnswer("");
+    setFocusOpen(false);
     if (!activeId || !online) return;
     fetch("/api/greeting", {
       method: "POST",
@@ -218,6 +234,7 @@ export default function StudyLamp() {
       );
       setData({ ...data, topics });
       setEntryText("");
+      checkProgress(active.id, text, active.roadmap);
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "The companion couldn't respond just now. Your note wasn't lost - try sending it again."
@@ -257,6 +274,114 @@ export default function StudyLamp() {
     setAsking(false);
   };
 
+  // v3.3: after a journal entry saves, quietly ask whether it shows a roadmap
+  // stage is done. Suggestions only — never errors, never blocks the UI.
+  const checkProgress = (topicId: string, entryText: string, roadmapSnapshot: RoadmapStage[]) => {
+    fetch("/api/progress", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topicId, entryText }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const ids: number[] = Array.isArray(d?.completedStageIds) ? d.completedStageIds : [];
+        if (!ids.length) return;
+        const idSet = new Set(ids);
+        const mark = (roadmap: RoadmapStage[]) =>
+          roadmap.map((s) => (idSet.has(s.id) && !s.done ? { ...s, suggestedDone: true } : s));
+        storageOp({ op: "updateRoadmap", topicId, roadmap: mark(roadmapSnapshot) }).catch(() => {});
+        setData((prev) =>
+          prev
+            ? {
+                ...prev,
+                topics: prev.topics.map((t) => (t.id === topicId ? { ...t, roadmap: mark(t.roadmap) } : t)),
+              }
+            : prev
+        );
+      })
+      .catch(() => {});
+  };
+
+  // Learner confirms or dismisses a suggested stage; either way the flag clears
+  // (JSON.stringify drops the undefined, so the store forgets it too).
+  const resolveSuggestion = async (stageId: number, accept: boolean) => {
+    if (!data || !active || !online) return;
+    const roadmap = active.roadmap.map((s) =>
+      s.id === stageId ? { ...s, done: accept ? true : s.done, suggestedDone: undefined } : s
+    );
+    setData({
+      ...data,
+      topics: data.topics.map((t) => (t.id === active.id ? { ...t, roadmap } : t)),
+    });
+    try {
+      await storageOp({ op: "updateRoadmap", topicId: active.id, roadmap });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't save that. Try again.");
+      loadData().then(setData);
+    }
+  };
+
+  // ----- v3.3 teach-back quiz (persists as a journal entry) -----
+  const startQuiz = async (seedNote?: string) => {
+    if (!active || quiz.phase === "loading" || quiz.phase === "grading" || !online) return;
+    setQuiz({ phase: "loading", question: "" });
+    setQuizAnswer("");
+    setError("");
+    setTab("journal");
+    try {
+      const res = await api<{ question: string }>("/api/quiz", {
+        topicId: active.id,
+        mode: "question",
+        seedNote,
+      });
+      setQuiz({ phase: "asked", question: res.question });
+    } catch (e) {
+      setQuiz({ phase: "idle", question: "" });
+      setError(e instanceof Error ? e.message : "The companion couldn't think of a question just now.");
+    }
+  };
+
+  const submitQuizAnswer = async () => {
+    const answer = quizAnswer.trim();
+    if (!answer || !active || !data || quiz.phase !== "asked" || !online) return;
+    setQuiz({ ...quiz, phase: "grading" });
+    setError("");
+    try {
+      const res = await api<{ feedback: string; updatedMemory: string }>("/api/quiz", {
+        topicId: active.id,
+        mode: "answer",
+        question: quiz.question,
+        answer,
+      });
+      const entry = {
+        date: new Date().toISOString(),
+        userNote: `Quiz — ${quiz.question}\n\nMy answer: ${answer}`,
+        companionReply: res.feedback || "",
+      };
+      const memory = res.updatedMemory || active.memory;
+      await storageOp({
+        op: "addJournalEntry",
+        topicId: active.id,
+        entry,
+        memory,
+        nextSuggestion: active.nextSuggestion,
+      });
+      setData({
+        ...data,
+        topics: data.topics.map((t) =>
+          t.id === active.id ? { ...t, journal: [...t.journal, entry], memory } : t
+        ),
+      });
+      setQuiz({ phase: "idle", question: "" });
+      setQuizAnswer("");
+    } catch (e) {
+      setQuiz({ ...quiz, phase: "asked" });
+      setError(
+        e instanceof Error ? e.message : "The companion couldn't respond just now. Your answer wasn't lost - try again."
+      );
+    }
+  };
+
   const toggleStage = async (stageId: number) => {
     if (!data || !active || !online) return;
     const roadmap = active.roadmap.map((s) => (s.id === stageId ? { ...s, done: !s.done } : s));
@@ -267,6 +392,25 @@ export default function StudyLamp() {
     });
     try {
       await storageOp({ op: "updateRoadmap", topicId: active.id, roadmap });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't save that. Try again.");
+      loadData().then(setData);
+    }
+  };
+
+  // v3.3: tap-to-cycle a resource through suggested → doing → done.
+  const cycleResourceStatus = async (index: number) => {
+    if (!data || !active || !online) return;
+    const next = { suggested: "doing", doing: "done", done: "suggested" } as const;
+    const resources = active.resources.map((r, i) =>
+      i === index ? { ...r, status: next[r.status ?? "suggested"] } : r
+    );
+    setData({
+      ...data,
+      topics: data.topics.map((t) => (t.id === active.id ? { ...t, resources } : t)),
+    });
+    try {
+      await storageOp({ op: "updateResources", topicId: active.id, resources });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't save that. Try again.");
       loadData().then(setData);
@@ -648,6 +792,28 @@ export default function StudyLamp() {
   }
 
   // ----- topic view -----
+  // v3.3 gentle review (spaced-lite, zero LLM cost until acted on): surface an
+  // entry that's ~7 or ~21 days old and hasn't been quiz-revisited since.
+  const DAY = 86400000;
+  const lastQuizTime = active.journal
+    .filter((e) => e.userNote.startsWith("Quiz —"))
+    .reduce((max, e) => Math.max(max, Date.parse(e.date)), 0);
+  const reviewCandidate =
+    active.journal
+      .filter((e) => !e.userNote.startsWith("Quiz —"))
+      .filter((e) => {
+        const age = Date.now() - Date.parse(e.date);
+        return age >= 7 * DAY && Date.parse(e.date) > lastQuizTime;
+      })
+      .sort((a, b) => {
+        // Closest to a spaced interval (7 or 21 days) wins.
+        const dist = (e: typeof a) => {
+          const days = (Date.now() - Date.parse(e.date)) / DAY;
+          return Math.min(Math.abs(days - 7), Math.abs(days - 21));
+        };
+        return dist(a) - dist(b);
+      })[0] ?? null;
+
   const doneCount = active.roadmap.filter((s) => s.done).length;
   const glowLevel = Math.min(1, (active.journal.length + (active.qa || []).length * 0.5) / 10);
   const qaList = active.qa || [];
@@ -691,7 +857,24 @@ export default function StudyLamp() {
           >
             {active.name}
           </h1>
+          {!focusOpen && (
+            <Btn variant="ghost" onClick={() => setFocusOpen(true)} style={{ padding: "8px 12px", flexShrink: 0 }}>
+              ◉ Focus
+            </Btn>
+          )}
         </div>
+
+        {focusOpen && (
+          <FocusSession
+            topicName={active.name}
+            onFinish={(minutes) => {
+              setFocusOpen(false);
+              setTab("journal");
+              setEntryText(`Focused for ${minutes} min on ${active.name} — `);
+            }}
+            onClose={() => setFocusOpen(false)}
+          />
+        )}
 
         {offlineNote}
 
@@ -751,6 +934,59 @@ export default function StudyLamp() {
           </div>
         )}
 
+        {reviewCandidate && !reviewDismissed && quiz.phase === "idle" && (
+          <div
+            style={{
+              background: C.panel2,
+              border: `1px solid ${C.line}`,
+              borderRadius: 12,
+              padding: "10px 14px",
+              marginBottom: 16,
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 200, fontSize: 13, lineHeight: 1.5, color: C.dim }}>
+              A while back you learned:{" "}
+              <span style={{ color: C.ink, fontFamily: serif }}>
+                &ldquo;{reviewCandidate.userNote.slice(0, 90)}
+                {reviewCandidate.userNote.length > 90 ? "…" : ""}&rdquo;
+              </span>{" "}
+              — still got it?
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <Btn
+                variant="ghost"
+                onClick={() => {
+                  setReviewDismissed(true);
+                  startQuiz(reviewCandidate.userNote);
+                }}
+                disabled={!online}
+                style={{ padding: "6px 12px", fontSize: 13 }}
+              >
+                Quiz me on it
+              </Btn>
+              <button
+                onClick={() => setReviewDismissed(true)}
+                aria-label="Dismiss review reminder"
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: C.dim,
+                  cursor: "pointer",
+                  fontSize: 16,
+                  padding: 2,
+                  lineHeight: 1,
+                }}
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        )}
+
         {tab === "overview" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <Card>
@@ -784,6 +1020,12 @@ export default function StudyLamp() {
                   <strong>{qaList.length}</strong>{" "}
                   <span style={{ color: C.dim }}>{qaList.length === 1 ? "question" : "questions"} asked</span>
                 </span>
+                <span>
+                  <strong style={{ color: C.sage }}>
+                    {active.resources.filter((r) => r.status === "done").length}
+                  </strong>
+                  <span style={{ color: C.dim }}>/{active.resources.length} resources</span>
+                </span>
               </div>
               <div style={{ marginTop: 12, height: 5, background: C.bg, borderRadius: 3 }}>
                 <div
@@ -810,44 +1052,73 @@ export default function StudyLamp() {
             <Card>
               <Eyebrow>Resources</Eyebrow>
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {active.resources.map((r, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      paddingBottom: i < active.resources.length - 1 ? 12 : 0,
-                      borderBottom: i < active.resources.length - 1 ? `1px solid ${C.line}` : "none",
-                    }}
-                  >
-                    <div style={{ fontSize: 15, fontWeight: 600 }}>
-                      <a
-                        href={r.url ? readerUrl(r.url) : searchUrl(`${r.title} ${active.name}`)}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{
-                          color: C.ink,
-                          textDecoration: "underline",
-                          textDecorationColor: C.amber,
-                          textUnderlineOffset: 3,
-                        }}
+                {active.resources.map((r, i) => {
+                  const status = r.status ?? "suggested";
+                  const statusColor = status === "done" ? C.sage : status === "doing" ? C.amber : C.dim;
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        paddingBottom: i < active.resources.length - 1 ? 12 : 0,
+                        borderBottom: i < active.resources.length - 1 ? `1px solid ${C.line}` : "none",
+                        opacity: status === "done" ? 0.75 : 1,
+                      }}
+                    >
+                      <div
+                        style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 15, fontWeight: 600 }}
                       >
-                        {r.title} ↗
-                      </a>{" "}
-                      <span
-                        style={{
-                          fontSize: 11,
-                          color: C.amber,
-                          fontWeight: 600,
-                          textTransform: "uppercase",
-                          letterSpacing: "0.08em",
-                          marginLeft: 6,
-                        }}
-                      >
-                        {r.type}
-                      </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <a
+                            href={r.url ? readerUrl(r.url) : searchUrl(`${r.title} ${active.name}`)}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{
+                              color: C.ink,
+                              textDecoration: "underline",
+                              textDecorationColor: C.amber,
+                              textUnderlineOffset: 3,
+                            }}
+                          >
+                            {r.title} ↗
+                          </a>{" "}
+                          <span
+                            style={{
+                              fontSize: 11,
+                              color: C.amber,
+                              fontWeight: 600,
+                              textTransform: "uppercase",
+                              letterSpacing: "0.08em",
+                              marginLeft: 6,
+                            }}
+                          >
+                            {r.type}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => cycleResourceStatus(i)}
+                          title="Tap to change: suggested → doing → done"
+                          style={{
+                            fontFamily: sans,
+                            fontSize: 11,
+                            fontWeight: 600,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.06em",
+                            padding: "3px 10px",
+                            borderRadius: 999,
+                            border: `1px solid ${statusColor}`,
+                            background: "transparent",
+                            color: statusColor,
+                            cursor: "pointer",
+                            flexShrink: 0,
+                          }}
+                        >
+                          {status === "done" ? "✓ done" : status}
+                        </button>
+                      </div>
+                      <div style={{ color: C.dim, fontSize: 13, marginTop: 3, lineHeight: 1.5 }}>{r.why}</div>
                     </div>
-                    <div style={{ color: C.dim, fontSize: 13, marginTop: 3, lineHeight: 1.5 }}>{r.why}</div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
               <div style={{ marginTop: 12, fontSize: 12, color: C.dim }}>
                 Suggested from the companion&apos;s knowledge - worth verifying availability yourself.
@@ -865,44 +1136,78 @@ export default function StudyLamp() {
             <div style={{ color: C.dim, fontSize: 13, marginBottom: 4 }}>
               {doneCount} of {active.roadmap.length} stages complete - tap a stage when you&apos;ve got it.
             </div>
-            {active.roadmap.map((s) => (
-              <Card
-                key={s.id}
-                style={{
-                  cursor: "pointer",
-                  opacity: s.done ? 0.75 : 1,
-                  borderColor: s.done ? C.sage : C.line,
-                }}
-              >
-                <div onClick={() => toggleStage(s.id)} style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-                  <div
-                    style={{
-                      width: 22,
-                      height: 22,
-                      borderRadius: 7,
-                      border: `2px solid ${s.done ? C.sage : C.dim}`,
-                      background: s.done ? C.sage : "transparent",
-                      color: C.bg,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 14,
-                      fontWeight: 800,
-                      flexShrink: 0,
-                      marginTop: 1,
-                    }}
-                  >
-                    {s.done ? "✓" : ""}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 15, fontWeight: 600, textDecoration: s.done ? "line-through" : "none" }}>
-                      {s.title}
+            {active.roadmap.map((s) => {
+              const suggested = !s.done && s.suggestedDone;
+              return (
+                <Card
+                  key={s.id}
+                  style={{
+                    cursor: "pointer",
+                    opacity: s.done ? 0.75 : 1,
+                    borderColor: s.done ? C.sage : suggested ? C.amber : C.line,
+                    background: suggested ? C.amberSoft : undefined,
+                  }}
+                >
+                  <div onClick={() => toggleStage(s.id)} style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                    <div
+                      style={{
+                        width: 22,
+                        height: 22,
+                        borderRadius: 7,
+                        border: `2px solid ${s.done ? C.sage : suggested ? C.amber : C.dim}`,
+                        background: s.done ? C.sage : "transparent",
+                        color: C.bg,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: 14,
+                        fontWeight: 800,
+                        flexShrink: 0,
+                        marginTop: 1,
+                      }}
+                    >
+                      {s.done ? "✓" : ""}
                     </div>
-                    <div style={{ color: C.dim, fontSize: 13, marginTop: 3, lineHeight: 1.5 }}>{s.desc}</div>
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 600, textDecoration: s.done ? "line-through" : "none" }}>
+                        {s.title}
+                      </div>
+                      <div style={{ color: C.dim, fontSize: 13, marginTop: 3, lineHeight: 1.5 }}>{s.desc}</div>
+                    </div>
                   </div>
-                </div>
-              </Card>
-            ))}
+                  {suggested && (
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 10,
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        marginTop: 10,
+                        paddingTop: 10,
+                        borderTop: `1px solid ${C.line}`,
+                      }}
+                    >
+                      <span style={{ fontSize: 13, color: C.amber, flex: 1, minWidth: 180 }}>
+                        From your journal, the companion thinks you&apos;ve got this one.
+                      </span>
+                      <Btn
+                        onClick={() => resolveSuggestion(s.id, true)}
+                        style={{ padding: "6px 12px", fontSize: 13 }}
+                      >
+                        Mark done
+                      </Btn>
+                      <Btn
+                        variant="ghost"
+                        onClick={() => resolveSuggestion(s.id, false)}
+                        style={{ padding: "6px 12px", fontSize: 13 }}
+                      >
+                        Not yet
+                      </Btn>
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
           </div>
         )}
 
@@ -1013,6 +1318,59 @@ export default function StudyLamp() {
             ))}
             <div ref={journalEndRef} />
 
+            {quiz.phase !== "idle" && (
+              <Card style={{ borderColor: C.amber }}>
+                <Eyebrow>Quiz time — explain it back</Eyebrow>
+                {quiz.phase === "loading" ? (
+                  <Spinner label="The companion is thinking of a question..." />
+                ) : (
+                  <>
+                    <div style={{ fontFamily: serif, fontSize: 15, lineHeight: 1.6, marginBottom: 10 }}>
+                      {quiz.question}
+                    </div>
+                    <textarea
+                      value={quizAnswer}
+                      onChange={(e) => setQuizAnswer(e.target.value)}
+                      placeholder="Explain it in your own words - imperfect is fine, that's the point..."
+                      rows={3}
+                      disabled={quiz.phase === "grading"}
+                      style={{
+                        width: "100%",
+                        boxSizing: "border-box",
+                        background: C.bg,
+                        border: `1px solid ${C.line}`,
+                        borderRadius: 10,
+                        padding: "10px 12px",
+                        color: C.ink,
+                        fontSize: 16,
+                        fontFamily: sans,
+                        outline: "none",
+                        resize: "vertical",
+                      }}
+                    />
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10 }}>
+                      <Btn onClick={submitQuizAnswer} disabled={quiz.phase === "grading" || !quizAnswer.trim() || !online}>
+                        {quiz.phase === "grading" ? "Checking..." : "That's my answer"}
+                      </Btn>
+                      {quiz.phase === "grading" ? (
+                        <Spinner label="The companion is reading your answer..." />
+                      ) : (
+                        <Btn variant="ghost" onClick={() => setQuiz({ phase: "idle", question: "" })}>
+                          Not now
+                        </Btn>
+                      )}
+                      <div style={{ marginLeft: "auto" }}>
+                        <MicButton
+                          onText={(t) => setQuizAnswer((v) => (v ? v.replace(/\s*$/, " ") : "") + t)}
+                          disabled={quiz.phase === "grading"}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+              </Card>
+            )}
+
             <Card>
               <Eyebrow>Tell me what you learned</Eyebrow>
               <textarea
@@ -1039,6 +1397,14 @@ export default function StudyLamp() {
                   {thinking ? "Listening..." : "Share"}
                 </Btn>
                 {thinking && <Spinner label="The companion is reflecting..." />}
+                {!thinking && quiz.phase === "idle" && active.memory && (
+                  <Btn variant="ghost" onClick={() => startQuiz()} disabled={!online}>
+                    Quiz me
+                  </Btn>
+                )}
+                <div style={{ marginLeft: "auto" }}>
+                  <MicButton onText={(t) => setEntryText((v) => (v ? v.replace(/\s*$/, " ") : "") + t)} disabled={thinking} />
+                </div>
               </div>
               {error && <div style={{ marginTop: 10, color: C.danger, fontSize: 13 }}>{error}</div>}
             </Card>
@@ -1053,6 +1419,11 @@ export default function StudyLamp() {
             onRetry={() => retryExtract(openItem.id)}
             onPaste={(text) => pasteText(openItem.id, text)}
             onQuote={setQuoteSeed}
+            onLogLearned={() => {
+              setOpenItemId(null);
+              setTab("journal");
+              setEntryText(`Watched: ${openItem.title} — `);
+            }}
             bookChunk={bookChunk}
             onBookChunk={setBookChunk}
             panel={

@@ -63,8 +63,25 @@ export const greetingSchema = z.object({
   greeting: z.string(),
 });
 
+// --- v3.3 Living Companion ---
+export const quizQuestionSchema = z.object({
+  question: z.string(),
+});
+
+export const quizFeedbackSchema = z.object({
+  feedback: z.string(),
+  updatedMemory: z.string(),
+});
+
+export const progressSchema = z.object({
+  completedStageIds: z.array(z.number()).default([]),
+});
+
 export type TopicSetupResponse = z.infer<typeof topicSetupSchema>;
 export type JournalResponse = z.infer<typeof journalSchema>;
 export type AskResponse = z.infer<typeof askSchema>;
 export type DiscussResponse = z.infer<typeof discussSchema>;
 export type GreetingResponse = z.infer<typeof greetingSchema>;
+export type QuizQuestionResponse = z.infer<typeof quizQuestionSchema>;
+export type QuizFeedbackResponse = z.infer<typeof quizFeedbackSchema>;
+export type ProgressResponse = z.infer<typeof progressSchema>;

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getRequestStorage } from "@/lib/storage";
-import type { AppData, JournalEntry, LibraryItem, QAItem, RoadmapStage, Topic } from "@/lib/types";
+import type { AppData, JournalEntry, LibraryItem, QAItem, Resource, RoadmapStage, Topic } from "@/lib/types";
 
 export async function GET() {
   const ctx = await getRequestStorage();
@@ -72,6 +72,13 @@ export async function POST(req: Request) {
           return NextResponse.json({ error: "Invalid roadmap." }, { status: 400 });
         }
         await storage.updateRoadmap(userId, body.topicId, body.roadmap as RoadmapStage[]);
+        return NextResponse.json({ ok: true });
+      }
+      case "updateResources": {
+        if (typeof body.topicId !== "string" || !Array.isArray(body.resources)) {
+          return NextResponse.json({ error: "Invalid resources." }, { status: 400 });
+        }
+        await storage.updateResources(userId, body.topicId, body.resources as Resource[]);
         return NextResponse.json({ ok: true });
       }
       case "updateLibraryStatus": {

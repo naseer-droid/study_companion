@@ -71,6 +71,27 @@ Things only you can do. Tick them here **and** update the matching line in
   - *Verify:* opens full-screen with the lamp icon; airplane mode still shows
     your topics read-only with the offline banner.
 
+## v3.3 Living Companion + focus/voice — new owner actions (2026-07-19)
+
+v3.3 (teach-back quiz, review chip, roadmap suggestions, resource status,
+focus session, voice dictation, watched-video prefill) needs **no new env
+vars and no schema changes** — jsonb columns absorb the new fields. Committed
+locally and verified end-to-end in local mode.
+
+- [ ] **Push + redeploy** (after finishing any pending v3.2 steps below —
+  the Supadata/Jina keys are already in your local `.env.local`, so if you've
+  also added them to Vercel and re-run the schema, everything ships together).
+  - *Why only you:* pushing is your pre-deploy step (per our workflow).
+  - *Verify on the phone:*
+    - Journal tab → **Quiz me** → answer → warm feedback lands as a journal entry.
+    - A 7+ day old entry shows the "still got it?" chip → **Quiz me on it**.
+    - Write an entry that clearly finishes a stage → Path tab shows the amber
+      "companion thinks you've got this" card → Mark done.
+    - Resource rows have tap-to-cycle status chips; Brief tab counts them.
+    - **◉ Focus** in the topic header → timer, music toggle, chime, prefilled entry.
+    - 🎤 appears on the journal/quiz composers (Chrome/Safari; hidden on Firefox).
+    - Open a YouTube item → **Log what I learned** → prefilled "Watched: …".
+
 ## v3.2 reliable extraction + books — new owner actions (2026-07-18)
 
 Deployed extraction fails because Vercel's datacenter IPs are blocked by

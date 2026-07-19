@@ -159,6 +159,7 @@ export default function ReaderView({
   onRetry,
   onPaste,
   onQuote,
+  onLogLearned,
   bookChunk,
   onBookChunk,
   panel,
@@ -169,6 +170,7 @@ export default function ReaderView({
   onRetry: () => Promise<void>;
   onPaste: (text: string) => Promise<void>;
   onQuote: (text: string) => void;
+  onLogLearned?: () => void; // v3.3: jump to the journal, prefilled "Watched: …"
   bookChunk: number;
   onBookChunk: (chunk: number) => void;
   panel: ReactNode;
@@ -331,6 +333,11 @@ export default function ReaderView({
             <div style={{ color: C.dim, fontSize: 12, fontFamily: sans }}>{item.siteName}</div>
           )}
         </div>
+        {item.kind === "youtube" && onLogLearned && (
+          <Btn variant="ghost" onClick={onLogLearned} style={{ padding: "8px 12px", fontSize: 13, flexShrink: 0 }}>
+            Log what I learned
+          </Btn>
+        )}
         <a
           href={item.url}
           target="_blank"

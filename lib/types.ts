@@ -5,6 +5,7 @@ export type Resource = {
   type: "book" | "course" | "website" | "video" | "practice";
   why: string;
   url?: string; // model-provided when confident; absent on pre-v3.1 topics
+  status?: "suggested" | "doing" | "done"; // absent = suggested (pre-v3.3 topics)
 };
 
 export type RoadmapStage = {
@@ -12,6 +13,7 @@ export type RoadmapStage = {
   title: string;
   desc: string;
   done: boolean;
+  suggestedDone?: boolean; // v3.3: companion thinks this stage is done; learner confirms or dismisses
 };
 
 export type JournalEntry = {

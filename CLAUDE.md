@@ -4,11 +4,11 @@ A learning-companion webapp: name a topic → get a brief, roadmap, and resource
 
 ## Status
 <!-- STATUS:START -->
-- **Updated:** 2026-07-18
-- **Phase:** v3.2 — background (non-blocking) library ingestion via after(), extraction fallbacks for Vercel's blocked datacenter IPs (Jina Reader for articles, Supadata for YouTube transcripts), retry + paste-text recovery, discuss-a-selection, library search/filters, "find more" chips, and streamed books (Gutenberg in-app reader, Open Library links, Drive .txt/.epub — no book text stored); verified end-to-end locally incl. Gutenberg paging + quote-to-discuss
-- **Architecture:** Next.js App Router; 5 LLM routes (topic/journal/ask/discuss/greeting) + library routes (ingest / content / extract-retry / paste / status / book-chunks) + op-based storage route + keepalive cron; shared extraction pipeline in lib/extract.ts, book streaming in lib/books.ts; StorageAdapter with JsonFileStorage (local) / SupabaseStorage (cloud, RLS); middleware auth gate; service worker (v3) + manifest; UI atoms in components/lamp-ui.tsx; link helpers in lib/links.ts
-- **Next:** 📋 Naseer creates the Supadata key, adds SUPADATA_API_KEY (+ optional JINA_API_KEY) to Vercel, re-runs supabase/schema.sql, redeploys, re-tests Medium + YouTube + a Gutenberg book on the phone (see docs/next-steps.md → v3.2)
-- **Blocked on:** the human-only v3.2 steps in docs/next-steps.md (Supadata account, Vercel env vars, schema re-run, redeploy)
+- **Updated:** 2026-07-19
+- **Phase:** v3.3 — Living Companion: teach-back quiz (persists as journal entries), deterministic spaced review chip (7/21-day, seeds the quiz), auto-*suggested* roadmap progress after journal entries (learner confirms, never silent), resource status chips (suggested→doing→done, counted in progress card), 25-min focus session using the once-orphaned audio (ends in a prefilled journal entry), Web Speech voice dictation on journal + quiz, "Log what I learned" prefill from YouTube items; verified end-to-end locally (local mode), no schema changes or new env vars needed
+- **Architecture:** Next.js App Router; 7 LLM routes (topic/journal/ask/discuss/greeting/quiz/progress) + library routes (ingest / content / extract-retry / paste / status / book-chunks) + op-based storage route + keepalive cron; shared extraction pipeline in lib/extract.ts, book streaming in lib/books.ts; StorageAdapter with JsonFileStorage (local) / SupabaseStorage (cloud, RLS); middleware auth gate; service worker (v3) + manifest; UI atoms in components/lamp-ui.tsx; link helpers in lib/links.ts
+- **Next:** 📋 Naseer finishes the v3.2 owner steps if not yet done on Vercel (Supadata/Jina keys are now in local .env.local; Vercel side unverified), re-runs supabase/schema.sql if pending, pushes + redeploys, then re-tests v3.2 (Medium/YouTube/Gutenberg) and v3.3 (quiz, focus, voice) on the phone — see docs/next-steps.md
+- **Blocked on:** the human-only deploy steps in docs/next-steps.md (Vercel env vars if still missing, schema re-run if pending, push + redeploy)
 <!-- STATUS:END -->
 
 ## Commands

@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { AppData, Topic, JournalEntry, QAItem, RoadmapStage, LibraryItem, DiscussionMsg } from "./types";
+import type { AppData, Topic, JournalEntry, QAItem, Resource, RoadmapStage, LibraryItem, DiscussionMsg } from "./types";
 import { supabaseEnabled } from "./supabase/config";
 import { createClient } from "./supabase/server";
 import { LOCAL_USER_ID } from "./auth";
@@ -23,6 +23,7 @@ export interface StorageAdapter {
   ): Promise<void>;
   addQA(userId: string, topicId: string, item: QAItem, memory: string): Promise<void>;
   updateRoadmap(userId: string, topicId: string, roadmap: RoadmapStage[]): Promise<void>;
+  updateResources(userId: string, topicId: string, resources: Resource[]): Promise<void>;
   // --- Study Room (v3.0) ---
   addLibraryItem(
     userId: string,
@@ -143,6 +144,13 @@ class JsonFileStorage implements StorageAdapter {
     await this.mutate((d) => ({
       ...d,
       topics: d.topics.map((t) => (t.id === topicId ? { ...t, roadmap } : t)),
+    }));
+  }
+
+  async updateResources(_userId: string, topicId: string, resources: Resource[]): Promise<void> {
+    await this.mutate((d) => ({
+      ...d,
+      topics: d.topics.map((t) => (t.id === topicId ? { ...t, resources } : t)),
     }));
   }
 
@@ -541,6 +549,11 @@ class SupabaseStorage implements StorageAdapter {
   async updateRoadmap(_userId: string, topicId: string, roadmap: RoadmapStage[]): Promise<void> {
     const { error } = await this.supabase.from("topics").update({ roadmap }).eq("id", topicId);
     if (error) this.fail("update roadmap", error);
+  }
+
+  async updateResources(_userId: string, topicId: string, resources: Resource[]): Promise<void> {
+    const { error } = await this.supabase.from("topics").update({ resources }).eq("id", topicId);
+    if (error) this.fail("update resources", error);
   }
 
   async importData(userId: string, data: AppData): Promise<void> {
