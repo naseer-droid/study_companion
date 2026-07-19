@@ -71,6 +71,33 @@ Things only you can do. Tick them here **and** update the matching line in
   - *Verify:* opens full-screen with the lamp icon; airplane mode still shows
     your topics read-only with the offline banner.
 
+## v3.4 reader upgrades — new owner actions (2026-07-19)
+
+v3.4 (visible video transcript with tappable timestamps + search + copy, rich
+article reader with a Reader⇄Original-page toggle for Medium, per-article font
+size + scroll position, public .epub/.txt streaming books, redesigned mic with
+live dictation preview) needs **no new env vars and no schema changes** — it
+rides the existing content column and jsonb. Committed locally (`5f65a0f`) and
+verified end-to-end in local mode.
+
+- [ ] **Push + redeploy** (bundles with the pending v3.2/v3.3 steps — same
+  keys, same schema).
+  - *Why only you:* pushing is your pre-deploy step (per our workflow).
+  - *Verify on the phone:*
+    - Open a **YouTube** item → transcript panel under the video: tap a
+      timestamp → the video jumps there; the search box filters lines; Copy works.
+    - Open an **article** → it shows headings/images/formatting (not a flat
+      wall); A−/A+ resize and stick after reload; scroll position is remembered.
+    - Open a **Medium** item → **Original page** toggle loads the real page in
+      an iframe; **Reader** switches back to the clean text.
+    - Add a public ebook link (e.g. a Standard Ebooks `.epub` URL) → it streams
+      page by page like a Gutenberg book.
+    - The mic on the journal/quiz is now a clean icon (not the old emoji) and
+      shows your words live while you speak.
+  - *Note:* transcripts still come from an unofficial source and can be missing
+    or in an auto-selected language — the designed fallback (discuss from title)
+    is unchanged.
+
 ## v3.3 Living Companion + focus/voice — new owner actions (2026-07-19)
 
 v3.3 (teach-back quiz, review chip, roadmap suggestions, resource status,
