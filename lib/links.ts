@@ -50,3 +50,18 @@ export function searchUrl(query: string): string {
 export function youtubeSearchUrl(query: string): string {
   return `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
 }
+
+// v3.5: same-page detection across URL spellings (watch?v= vs youtu.be,
+// original vs freedium mirror, trailing slashes) — used to mark search
+// results and suggested resources that are already on the shelf.
+export function urlKey(raw: string): string {
+  try {
+    const u = new URL(readerUrl(raw));
+    const host = u.hostname.replace(/^www\.|^m\./, "");
+    if (host === "youtu.be") return `yt:${u.pathname.slice(1).split("/")[0]}`;
+    if (host === "youtube.com" && u.searchParams.get("v")) return `yt:${u.searchParams.get("v")}`;
+    return `${host}${u.pathname.replace(/\/$/, "")}`.toLowerCase();
+  } catch {
+    return raw;
+  }
+}

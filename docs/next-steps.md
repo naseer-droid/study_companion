@@ -71,6 +71,38 @@ Things only you can do. Tick them here **and** update the matching line in
   - *Verify:* opens full-screen with the lamp icon; airplane mode still shows
     your topics read-only with the offline banner.
 
+## v3.5 source discovery — new owner actions (2026-07-20)
+
+v3.5 (real in-app search for sources: the Library "Find more" chips and the
+resource cards' "find it 🔍" now open a search panel with actual YouTube and
+article results you can add to the shelf in one tap) needs **no schema
+changes**. One **optional** new env var makes video search reliable on Vercel.
+
+- [ ] **Create a free YouTube Data API key** (video search quality + reliability)
+  - *Why only you:* it's tied to your Google account.
+  - *How:* https://console.cloud.google.com → create/select a project →
+    "APIs & Services" → Library → enable **YouTube Data API v3** →
+    Credentials → **Create credentials → API key**. No billing account needed;
+    the free quota (~100 searches/day) resets daily.
+  - Add as `YOUTUBE_API_KEY` to `.env.local` **and** Vercel (all environments).
+    Article search needs nothing new — your existing `JINA_API_KEY` powers it.
+  - *Verify:* Library → "Find more" → ▶ chip → results show durations and
+    channels (the keyless fallback shows them too, but breaks more easily —
+    and usually won't work at all from Vercel's datacenter IPs).
+
+- [ ] **Push + redeploy** (bundles with any pending v3.2–v3.4 steps).
+  - *Why only you:* pushing is your pre-deploy step (per our workflow).
+  - *Verify on the phone:*
+    - Library → **Find more about [topic]** → tap a ▶ chip → real video
+      results appear → **Add** → the card lands on the shelf, extracts its
+      transcript, and plays in the reader.
+    - Switch to the **📄 Articles** tab in the same panel → results with
+      snippets → add one → it opens in the clean reader.
+    - Overview → Resources: a resource with a link shows **＋ add to library**
+      (turns into "in library ✓"); one without a link shows **find it 🔍**
+      which opens the panel pre-filled.
+    - Books are unchanged (📚 chip → the same book finder as before).
+
 ## v3.4 reader upgrades — new owner actions (2026-07-19)
 
 v3.4 (visible video transcript with tappable timestamps + search + copy, rich

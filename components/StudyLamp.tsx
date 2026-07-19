@@ -5,12 +5,13 @@ import type { AppData, Topic, LibraryItem, DiscussionMsg, RoadmapStage } from "@
 import type { TopicSetupResponse, JournalResponse, AskResponse } from "@/lib/schemas";
 import { supabaseEnabled } from "@/lib/supabase/config";
 import { C, serif, sans, Card, Eyebrow, Btn, Spinner, Linkify } from "./lamp-ui";
-import { readerUrl, searchUrl } from "@/lib/links";
+import { readerUrl, searchUrl, urlKey } from "@/lib/links";
 import Library from "./Library";
 import type { BookPick } from "./BookSearch";
 import ReaderView from "./ReaderView";
 import DiscussPanel from "./DiscussPanel";
 import FocusSession from "./FocusSession";
+import SourceSearch, { type SourceKind } from "./SourceSearch";
 import MicButton from "./MicButton";
 
 // ---------- server calls ----------
@@ -121,6 +122,10 @@ export default function StudyLamp() {
   const [quizAnswer, setQuizAnswer] = useState("");
   const [reviewDismissed, setReviewDismissed] = useState(false);
   const [focusOpen, setFocusOpen] = useState(false);
+  // v3.5 in-app source finder — opened from the Library "find more" row or a
+  // resource's "find" chip, pre-seeded with a query.
+  const [sourceSearch, setSourceSearch] = useState<{ query: string; kind: SourceKind } | null>(null);
+  const [addingResource, setAddingResource] = useState<number | null>(null);
   const journalEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -415,6 +420,21 @@ export default function StudyLamp() {
       setError(e instanceof Error ? e.message : "Couldn't save that. Try again.");
       loadData().then(setData);
     }
+  };
+
+  // v3.5: put a suggested resource (one the model gave a real URL for) on the
+  // Study Room shelf — same add flow as pasting the link.
+  const addResourceToLibrary = async (index: number) => {
+    if (!active || !online || addingResource !== null) return;
+    const url = active.resources[index]?.url;
+    if (!url) return;
+    setAddingResource(index);
+    try {
+      await addLibraryItem(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't add that. Try again.");
+    }
+    setAddingResource(null);
   };
 
   const deleteTopic = async (id: string) => {
@@ -1055,6 +1075,24 @@ export default function StudyLamp() {
                 {active.resources.map((r, i) => {
                   const status = r.status ?? "suggested";
                   const statusColor = status === "done" ? C.sage : status === "doing" ? C.amber : C.dim;
+                  // v3.5: bridge a suggestion to the Study Room — add directly
+                  // when the model gave a URL, otherwise offer a real search.
+                  const inShelf =
+                    !!r.url && (active.library ?? []).some((it) => urlKey(it.url) === urlKey(r.url!));
+                  const findQuery = r.title.toLowerCase().includes(active.name.toLowerCase())
+                    ? r.title
+                    : `${r.title} ${active.name}`;
+                  const resourceChip: React.CSSProperties = {
+                    fontFamily: sans,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: "3px 10px",
+                    borderRadius: 999,
+                    border: `1px solid ${C.line}`,
+                    background: "transparent",
+                    color: C.dim,
+                    cursor: "pointer",
+                  };
                   return (
                     <div
                       key={i}
@@ -1116,6 +1154,36 @@ export default function StudyLamp() {
                         </button>
                       </div>
                       <div style={{ color: C.dim, fontSize: 13, marginTop: 3, lineHeight: 1.5 }}>{r.why}</div>
+                      <div style={{ marginTop: 7 }}>
+                        {r.url ? (
+                          inShelf ? (
+                            <span style={{ ...resourceChip, cursor: "default", color: C.sage, borderColor: C.sage }}>
+                              in library ✓
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => void addResourceToLibrary(i)}
+                              disabled={addingResource !== null || !online}
+                              style={resourceChip}
+                            >
+                              {addingResource === i ? "adding…" : "＋ add to library"}
+                            </button>
+                          )
+                        ) : (
+                          <button
+                            onClick={() =>
+                              setSourceSearch({
+                                query: findQuery,
+                                kind: r.type === "video" ? "video" : "article",
+                              })
+                            }
+                            disabled={!online}
+                            style={resourceChip}
+                          >
+                            find it 🔍
+                          </button>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -1217,6 +1285,7 @@ export default function StudyLamp() {
             online={online}
             onAdd={addLibraryItem}
             onAddBook={addBookItem}
+            onFindSources={(query, kind) => setSourceSearch({ query, kind })}
             onOpen={openLibraryItem}
             onDelete={deleteLibraryItem}
             onRetry={retryExtract}
@@ -1437,6 +1506,17 @@ export default function StudyLamp() {
                 onSeedConsumed={() => setQuoteSeed("")}
               />
             }
+          />
+        )}
+
+        {sourceSearch && (
+          <SourceSearch
+            topic={active}
+            online={online}
+            initialQuery={sourceSearch.query}
+            initialKind={sourceSearch.kind}
+            onAdd={addLibraryItem}
+            onClose={() => setSourceSearch(null)}
           />
         )}
       </div>

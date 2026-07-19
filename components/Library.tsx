@@ -3,9 +3,9 @@
 import { useState } from "react";
 import type { LibraryItem, Topic } from "@/lib/types";
 import { extractionState } from "@/lib/types";
-import { searchUrl, youtubeSearchUrl } from "@/lib/links";
 import { C, sans, Card, Eyebrow, Btn, Spinner } from "./lamp-ui";
 import BookSearch, { type BookPick } from "./BookSearch";
+import type { SourceKind } from "./SourceSearch";
 
 const statusLabel: Record<LibraryItem["status"], string> = {
   unread: "Unread",
@@ -32,30 +32,6 @@ const kindFallbackSite: Record<LibraryItem["kind"], string> = {
 type StatusFilter = "all" | "unread" | "done";
 type KindFilter = "all" | "youtube" | "article" | "book";
 
-// A small external-link chip for the "find more" row.
-function SearchChip({ href, label }: { href: string; label: string }) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      style={{
-        fontFamily: sans,
-        fontSize: 12,
-        fontWeight: 600,
-        padding: "6px 12px",
-        borderRadius: 999,
-        border: `1px solid ${C.line}`,
-        color: C.dim,
-        textDecoration: "none",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {label} ↗
-    </a>
-  );
-}
-
 // The Study Room shelf: paste article/YouTube/Drive links or pick books, tap
 // to read/watch with the companion. Item mutations are owned by the parent
 // (StudyLamp).
@@ -64,6 +40,7 @@ export default function Library({
   online,
   onAdd,
   onAddBook,
+  onFindSources,
   onOpen,
   onDelete,
   onRetry,
@@ -72,6 +49,7 @@ export default function Library({
   online: boolean;
   onAdd: (url: string) => Promise<void>;
   onAddBook: (book: BookPick) => Promise<void>;
+  onFindSources: (query: string, kind: SourceKind) => void;
   onOpen: (itemId: string) => void;
   onDelete: (itemId: string) => Promise<void>;
   onRetry: (itemId: string) => Promise<void>;
@@ -134,8 +112,9 @@ export default function Library({
     cursor: "pointer",
   });
 
-  // "Find more": search links built from the topic + its next open roadmap
-  // steps — a nudge toward the next thing worth looking up, not an LLM call.
+  // "Find more": real in-app searches seeded from the topic + its next open
+  // roadmap steps — a nudge toward the next thing worth looking up (v3.5:
+  // these open the SourceSearch panel instead of external search pages).
   const openSteps = topic.roadmap.filter((s) => !s.done).slice(0, 2);
 
   return (
@@ -196,14 +175,20 @@ export default function Library({
           </button>
           {findOpen && (
             <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8 }}>
-              <SearchChip href={youtubeSearchUrl(topic.name)} label={`▶ ${topic.name}`} />
-              <SearchChip href={searchUrl(topic.name)} label={`G ${topic.name}`} />
+              <button onClick={() => onFindSources(topic.name, "video")} style={chip(false)}>
+                ▶ {topic.name}
+              </button>
+              <button onClick={() => onFindSources(topic.name, "article")} style={chip(false)}>
+                📄 {topic.name}
+              </button>
               {openSteps.map((s) => (
-                <SearchChip
+                <button
                   key={s.id}
-                  href={youtubeSearchUrl(`${topic.name} ${s.title}`)}
-                  label={`▶ ${s.title}`}
-                />
+                  onClick={() => onFindSources(`${topic.name} ${s.title}`, "video")}
+                  style={chip(false)}
+                >
+                  ▶ {s.title}
+                </button>
               ))}
               <button onClick={() => setBookSearchOpen(true)} style={chip(false)}>
                 📚 Books
