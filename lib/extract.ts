@@ -217,7 +217,7 @@ function absoluteHttpUrl(raw: string, baseUrl: string): string {
   }
 }
 
-function sanitizeArticleHtml(html: string, baseUrl: string, JSDOM: JSDOMCtor): string {
+export function sanitizeArticleHtml(html: string, baseUrl: string, JSDOM: JSDOMCtor): string {
   const doc = new JSDOM(`<!DOCTYPE html><body>${html}</body>`, { url: baseUrl }).window.document;
   const body = doc.body;
 
@@ -287,6 +287,35 @@ function sanitizeArticleHtml(html: string, baseUrl: string, JSDOM: JSDOMCtor): s
   // Truncate at block boundaries so a stored article never ends mid-tag.
   while (body.lastChild && body.innerHTML.length > CONTENT_CAP) body.removeChild(body.lastChild);
   return body.innerHTML.trim();
+}
+
+// v3.8 markdown reader: articles stored as Markdown (Jina fallback + pasted/
+// uploaded MD) are converted to HTML at read time and run through the SAME
+// allow-list sanitizer as scraped HTML — so raw `<script>` embedded in MD is
+// dropped and there is exactly one render security boundary. Relative links
+// resolve against a placeholder base (pasted MD is normally absolute-linked).
+export async function renderMarkdownToSafeHtml(md: string, baseUrl?: string): Promise<string> {
+  const { marked } = await import("marked");
+  const { JSDOM } = await import("jsdom");
+  const rawHtml = marked.parse(md, { async: false, gfm: true }) as string;
+  return sanitizeArticleHtml(rawHtml, baseUrl || "https://markdown.local/", JSDOM);
+}
+
+// Reverse direction for "export as Markdown": sanitized-HTML articles become
+// Markdown via Turndown. Turndown is handed a real jsdom body node so it never
+// needs its own DOM parser under Node.
+export async function htmlToMarkdown(html: string): Promise<string> {
+  const [{ JSDOM }, { default: TurndownService }] = await Promise.all([
+    import("jsdom"),
+    import("turndown"),
+  ]);
+  const doc = new JSDOM(`<!DOCTYPE html><body>${html}</body>`).window.document;
+  const td = new TurndownService({
+    headingStyle: "atx",
+    codeBlockStyle: "fenced",
+    bulletListMarker: "-",
+  });
+  return td.turndown(doc.body).trim();
 }
 
 // Attempt 1: fetch + Readability, exactly as v3.0/3.1 did. jsdom/Readability

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRequestStorage } from "@/lib/storage";
 import { UA } from "@/lib/extract";
+import { urlKey } from "@/lib/links";
 
 // v3.5 source discovery: real search for videos and articles, replacing the
 // external search-link chips. Same layering philosophy as extraction — a
@@ -214,8 +215,20 @@ async function searchArticles(q: string): Promise<DiscoverResult[]> {
     devtoArticles(q),
     wikipediaArticles(q),
   ]);
+  // De-dup across sources by canonical URL: the web SERP and a dedicated source
+  // (Medium/Wikipedia/dev.to) often return the same page, which otherwise shows
+  // as a repeated row + a duplicate React key. Keep the first occurrence.
   const merged: DiscoverResult[] = [];
-  for (const r of settled) if (r.status === "fulfilled") merged.push(...r.value);
+  const seen = new Set<string>();
+  for (const r of settled) {
+    if (r.status !== "fulfilled") continue;
+    for (const item of r.value) {
+      const key = urlKey(item.url);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item);
+    }
+  }
   return merged;
 }
 

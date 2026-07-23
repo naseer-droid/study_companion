@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 import { after } from "next/server";
 import { getRequestStorage } from "@/lib/storage";
 import { readerUrl } from "@/lib/links";
-import { youtubeVideoId, quickYouTubeMeta, extractAndStore, assertPublicHttpUrl } from "@/lib/extract";
+import {
+  youtubeVideoId,
+  quickYouTubeMeta,
+  extractAndStore,
+  assertPublicHttpUrl,
+  CONTENT_CAP,
+} from "@/lib/extract";
 import { driveFileId, retryBookProbe } from "@/lib/books";
 import { videoEmbed, videoEmbedMeta } from "@/lib/embed";
 import type { BookSource } from "@/lib/types";
@@ -43,6 +49,18 @@ async function handleAdd(req: Request) {
   // client already has the metadata, nothing to extract.
   if (body.book && typeof body.book === "object") {
     return addPickedBook(ctx, topicId, body.book as Record<string, unknown>);
+  }
+
+  // v3.8: paste/upload Markdown directly (e.g. an LLM-generated summary or a
+  // .md file). Stored as a Markdown article — no URL, no extraction; it reads
+  // in the same reader as any Markdown-format article.
+  if (typeof body.markdown === "string" && body.markdown.trim()) {
+    return addMarkdownNote(
+      ctx,
+      topicId,
+      body.markdown.trim(),
+      typeof body.title === "string" ? body.title.trim() : ""
+    );
   }
 
   let parsed: URL;
@@ -236,6 +254,45 @@ async function addPickedBook(
       bookSource,
     },
     ""
+  );
+  return NextResponse.json({ item });
+}
+
+// Derive a card title from pasted Markdown: the first ATX/underline heading,
+// else the first non-empty line, else a fallback — capped so a runaway first
+// line can't become the title.
+function titleFromMarkdown(md: string): string {
+  for (const raw of md.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const h = line.replace(/^#{1,6}\s+/, "").replace(/^#+$/, "").trim();
+    return (h || line).replace(/[*_`]/g, "").slice(0, 120).trim() || "Untitled note";
+  }
+  return "Untitled note";
+}
+
+async function addMarkdownNote(
+  ctx: NonNullable<Awaited<ReturnType<typeof getRequestStorage>>>,
+  topicId: string,
+  markdown: string,
+  providedTitle: string
+) {
+  const item = await ctx.storage.addLibraryItem(
+    ctx.userId,
+    topicId,
+    {
+      kind: "article",
+      // Synthetic, non-navigable URL: there is no original page. The reader
+      // hides "Original ↗" for about: URLs.
+      url: `about:markdown/${crypto.randomUUID()}`,
+      title: providedTitle || titleFromMarkdown(markdown),
+      addedAt: new Date().toISOString(),
+      status: "unread",
+      siteName: "Markdown",
+      hasContent: true,
+      extraction: "ok",
+    },
+    markdown.slice(0, CONTENT_CAP)
   );
   return NextResponse.json({ item });
 }

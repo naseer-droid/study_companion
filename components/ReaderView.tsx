@@ -1,8 +1,8 @@
 "use client";
 
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryItem } from "@/lib/types";
-import { extractionState, parseTranscript, looksLikeHtml } from "@/lib/types";
+import { extractionState, parseTranscript, looksLikeHtml, stripHtml } from "@/lib/types";
 import { FREEDIUM_MIRROR } from "@/lib/links";
 import { videoEmbed } from "@/lib/embed";
 import { C, serif, sans, Btn, Spinner } from "./lamp-ui";
@@ -338,10 +338,74 @@ export default function ReaderView({
   const [seekTime, setSeekTime] = useState<number | null>(null); // transcript → player seek
   const [mode, setMode] = useState<"reader" | "original">("reader"); // Freedium embed toggle
   const [fontScale, setFontScale] = useState(1);
+  const [toc, setToc] = useState<{ id: string; text: string; level: number }[]>([]);
+  const [exported, setExported] = useState(false);
   const articleRef = useRef<HTMLElement | null>(null);
   const mainRef = useRef<HTMLDivElement | null>(null);
 
   const ext = extractionState(item);
+
+  // Pasted/uploaded Markdown notes have a synthetic about: URL — there is no
+  // original page to link to or embed.
+  const hasOriginal = !item.url.startsWith("about:");
+
+  // Reading time + word count from the rendered article text (content is HTML
+  // for articles by the time it reaches the reader; transcripts are excluded).
+  const readingStats = useMemo(() => {
+    if (item.kind !== "article" || !content) return null;
+    const text = looksLikeHtml(content) ? stripHtml(content) : content;
+    const words = text.trim().split(/\s+/).filter(Boolean).length;
+    return words ? { words, mins: Math.max(1, Math.ceil(words / 200)) } : null;
+  }, [item.kind, content]);
+
+  // Build a table of contents from the rendered headings after each article
+  // loads; assign stable ids so the entries can scroll to their section. Hidden
+  // for short pieces (fewer than 2 headings).
+  useEffect(() => {
+    if (item.kind !== "article" || !content) {
+      setToc([]);
+      return;
+    }
+    const el = articleRef.current;
+    if (!el) return;
+    const heads = Array.from(el.querySelectorAll("h2, h3")) as HTMLElement[];
+    const entries = heads
+      .map((h, i) => {
+        const text = (h.textContent || "").trim();
+        if (!h.id) {
+          h.id =
+            `sec-${i}-` +
+            text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 40);
+        }
+        return { id: h.id, text, level: h.tagName === "H3" ? 3 : 2 };
+      })
+      .filter((e) => e.text);
+    setToc(entries.length >= 2 ? entries : []);
+  }, [content, item.kind, item.id]);
+
+  const exportMarkdown = async () => {
+    try {
+      const res = await fetch(`/api/library/content?itemId=${encodeURIComponent(item.id)}&as=md`);
+      const data = res.ok ? await res.json() : null;
+      const md = typeof data?.markdown === "string" ? data.markdown : "";
+      if (!md) return;
+      try {
+        await navigator.clipboard.writeText(md);
+        setExported(true);
+        window.setTimeout(() => setExported(false), 1800);
+      } catch {
+        // clipboard blocked (insecure context) — fall back to a file download
+        const blob = new Blob([md], { type: "text/markdown" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `${(item.title || "article").replace(/[^\w.-]+/g, "-").slice(0, 60)}.md`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+    } catch {
+      // network hiccup — silently ignore; the button can be pressed again
+    }
+  };
   // Medium items were rewritten to the Freedium mirror at ingestion, so their
   // stored URL is embeddable (Medium itself sets X-Frame-Options); offer to
   // view the real page inline. Non-mirror articles keep only "Original ↗".
@@ -560,8 +624,16 @@ export default function ReaderView({
           >
             {item.title}
           </div>
-          {item.siteName && (
-            <div style={{ color: C.dim, fontSize: 12, fontFamily: sans }}>{item.siteName}</div>
+          {(item.siteName || readingStats) && (
+            <div style={{ color: C.dim, fontSize: 12, fontFamily: sans }}>
+              {[
+                item.siteName,
+                readingStats ? `~${readingStats.mins} min read` : null,
+                readingStats ? `${readingStats.words.toLocaleString()} words` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </div>
           )}
         </div>
         {item.kind === "youtube" && onLogLearned && (
@@ -600,14 +672,25 @@ export default function ReaderView({
             </button>
           </div>
         )}
-        <a
-          href={item.url}
-          target="_blank"
-          rel="noreferrer"
-          style={{ color: C.dim, fontSize: 12, fontFamily: sans, flexShrink: 0 }}
-        >
-          Original ↗
-        </a>
+        {item.kind === "article" && item.hasContent && mode === "reader" && (
+          <Btn
+            variant="ghost"
+            onClick={exportMarkdown}
+            style={{ padding: "8px 12px", fontSize: 13, flexShrink: 0 }}
+          >
+            {exported ? "Copied ✓" : "Copy as MD"}
+          </Btn>
+        )}
+        {hasOriginal && (
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: C.dim, fontSize: 12, fontFamily: sans, flexShrink: 0 }}
+          >
+            Original ↗
+          </a>
+        )}
       </header>
 
       <div className="lc-reader-body">
@@ -785,12 +868,63 @@ export default function ReaderView({
             </div>
           ) : content ? (
             looksLikeHtml(content) ? (
-              <article
-                ref={articleRef}
-                className="lc-article-html"
-                style={htmlArticleStyle}
-                dangerouslySetInnerHTML={{ __html: content }}
-              />
+              <>
+                {toc.length > 0 && (
+                  <details
+                    style={{
+                      maxWidth: "65ch",
+                      margin: "16px auto 0",
+                      padding: "0 20px",
+                      fontFamily: sans,
+                    }}
+                  >
+                    <summary
+                      style={{
+                        cursor: "pointer",
+                        color: C.dim,
+                        fontSize: 12,
+                        fontWeight: 700,
+                        letterSpacing: "0.06em",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      Contents
+                    </summary>
+                    <ul style={{ listStyle: "none", margin: "10px 0 0", padding: 0 }}>
+                      {toc.map((h) => (
+                        <li key={h.id} style={{ margin: "2px 0" }}>
+                          <button
+                            onClick={() =>
+                              document
+                                .getElementById(h.id)
+                                ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                            }
+                            style={{
+                              background: "none",
+                              border: "none",
+                              padding: `2px 0 2px ${h.level === 3 ? 16 : 0}px`,
+                              color: C.dim,
+                              fontFamily: sans,
+                              fontSize: 13,
+                              lineHeight: 1.5,
+                              textAlign: "left",
+                              cursor: "pointer",
+                            }}
+                          >
+                            {h.text}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+                <article
+                  ref={articleRef}
+                  className="lc-article-html"
+                  style={htmlArticleStyle}
+                  dangerouslySetInnerHTML={{ __html: content }}
+                />
+              </>
             ) : (
               <article ref={articleRef} style={articleStyle}>
                 {content}

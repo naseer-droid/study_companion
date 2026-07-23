@@ -65,9 +65,18 @@ const hostOf = (url: string): string => {
 };
 
 // Article group headers, in display order. Anything unrecognised is "Web".
+// Classify by the result's HOST, not siteName: the general web SERP tags raw
+// hostnames (medium.com, en.wikipedia.org) while the dedicated sources tag
+// "Medium"/"Wikipedia", so a siteName match alone dropped SERP-sourced Medium/
+// Wikipedia results into "Web" and let them appear twice.
 const ARTICLE_GROUPS = ["Web", "Medium", "dev.to", "Wikipedia"] as const;
-const groupOf = (r: DiscoverResult): (typeof ARTICLE_GROUPS)[number] =>
-  r.siteName === "Medium" || r.siteName === "dev.to" || r.siteName === "Wikipedia" ? r.siteName : "Web";
+const groupOf = (r: DiscoverResult): (typeof ARTICLE_GROUPS)[number] => {
+  const host = hostOf(r.url);
+  if (host.endsWith("medium.com") || r.siteName === "Medium") return "Medium";
+  if (host.endsWith("wikipedia.org") || r.siteName === "Wikipedia") return "Wikipedia";
+  if (host === "dev.to" || r.siteName === "dev.to") return "dev.to";
+  return "Web";
+};
 
 export default function SourceSearch({
   topic,

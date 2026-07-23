@@ -71,6 +71,39 @@ Things only you can do. Tick them here **and** update the matching line in
   - *Verify:* opens full-screen with the lamp icon; airplane mode still shows
     your topics read-only with the offline banner.
 
+## v3.8 Markdown reader + MD input + filter fixes — new owner actions (2026-07-24)
+
+v3.8 (1) fixes the **raw-Markdown reader bug** — articles stored as Markdown
+(the Jina fallback, e.g. the "Data Integration Tools" screenshot) now render as
+formatted text, converted MD→sanitized HTML at read time; (2) lets you **add
+Markdown directly** — paste it or upload a `.md` file (great for LLM-generated
+notes) and it reads like any article; (3) adds **reading time + word count**, an
+auto **Contents** list, and **Copy as Markdown** in the reader; (4) fixes the
+**Library filters** — the **Reading** status now has its own chip (in-progress
+items were being hidden), filter chips show from 2 items, and Discover article
+results are grouped by host (Wikipedia/Medium no longer misfiled into "Web") and
+de-duplicated. **No schema change and no new required env vars** — `marked` and
+`turndown` are bundled dependencies.
+
+- [ ] **Push + redeploy** — no schema change is required for v3.8.
+  - *Why only you:* pushing is your pre-deploy step (per our workflow).
+
+- [ ] **Verify on the phone** after redeploy:
+  - Add an article that gets **blocked/thin** (a JS-heavy or paywalled page that
+    falls back to Jina) → the reader shows real **headings + links**, not raw
+    `###` / `[label](url)`.
+  - Library → **Paste or upload Markdown** → paste some Markdown (or pick a
+    `.md` file) → **Add to library** → it opens in the clean reader, formatted.
+  - In an article reader: the subtitle shows **`~N min read · words`**, a
+    **Contents** list appears for multi-heading pieces, and **Copy as MD** copies
+    the article as Markdown (falls back to a `.md` download if the clipboard is
+    blocked).
+  - Library shelf → the status chips are **All / Unread / Reading / Done**; tap
+    **Reading** → items you've opened but not finished show up (they used to
+    vanish under Unread/Done).
+  - Library → **Find more** → 📄 Articles → results are grouped under Web /
+    Medium / dev.to / Wikipedia with **no duplicate rows**.
+
 ## v3.7 PDF books + richer discovery — new owner actions (2026-07-23)
 
 v3.7 (1) **rolls back** the v3.6 Drive-folder "My Collection" scan — it never

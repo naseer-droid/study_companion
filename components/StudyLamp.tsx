@@ -463,6 +463,22 @@ export default function StudyLamp() {
     });
   };
 
+  // Pasted / uploaded Markdown — same route, stored as a Markdown article.
+  const addMarkdownItem = async (markdown: string, title?: string) => {
+    if (!data || !active) return;
+    const { item } = await api<{ item: LibraryItem }>("/api/library", {
+      topicId: active.id,
+      markdown,
+      title,
+    });
+    setData({
+      ...data,
+      topics: data.topics.map((t) =>
+        t.id === active.id ? { ...t, library: [...(t.library ?? []), item] } : t
+      ),
+    });
+  };
+
   // A picked book from the in-app search — same route, different body shape.
   const addBookItem = async (book: BookPick) => {
     if (!data || !active) return;
@@ -1285,6 +1301,7 @@ export default function StudyLamp() {
             online={online}
             onAdd={addLibraryItem}
             onAddBook={addBookItem}
+            onAddMarkdown={addMarkdownItem}
             onFindSources={(query, kind) => setSourceSearch({ query, kind })}
             onOpen={openLibraryItem}
             onDelete={deleteLibraryItem}

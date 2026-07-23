@@ -30,7 +30,7 @@ const kindFallbackSite: Record<LibraryItem["kind"], string> = {
   book: "Book",
 };
 
-type StatusFilter = "all" | "unread" | "done";
+type StatusFilter = "all" | "unread" | "reading" | "done";
 type KindFilter = "all" | "youtube" | "article" | "book";
 
 // The Study Room shelf: paste article/YouTube/Drive links or pick books, tap
@@ -41,6 +41,7 @@ export default function Library({
   online,
   onAdd,
   onAddBook,
+  onAddMarkdown,
   onFindSources,
   onOpen,
   onDelete,
@@ -50,6 +51,7 @@ export default function Library({
   online: boolean;
   onAdd: (url: string) => Promise<void>;
   onAddBook: (book: BookPick) => Promise<void>;
+  onAddMarkdown: (markdown: string, title?: string) => Promise<void>;
   onFindSources: (query: string, kind: SourceKind) => void;
   onOpen: (itemId: string) => void;
   onDelete: (itemId: string) => Promise<void>;
@@ -65,6 +67,11 @@ export default function Library({
   const [findOpen, setFindOpen] = useState(false);
   const [bookSearchOpen, setBookSearchOpen] = useState(false);
   const [suggestOpen, setSuggestOpen] = useState(false);
+  const [mdOpen, setMdOpen] = useState(false);
+  const [mdText, setMdText] = useState("");
+  const [mdTitle, setMdTitle] = useState("");
+  const [mdBusy, setMdBusy] = useState(false);
+  const [mdError, setMdError] = useState("");
 
   const add = async () => {
     const u = url.trim();
@@ -78,6 +85,40 @@ export default function Library({
       setError(e instanceof Error ? e.message : "Couldn't add that link. Try again.");
     }
     setAdding(false);
+  };
+
+  const addMarkdown = async () => {
+    const md = mdText.trim();
+    if (!md || mdBusy || !online) return;
+    setMdBusy(true);
+    setMdError("");
+    try {
+      await onAddMarkdown(md, mdTitle.trim() || undefined);
+      setMdText("");
+      setMdTitle("");
+      setMdOpen(false);
+    } catch (e) {
+      setMdError(e instanceof Error ? e.message : "Couldn't add that. Try again.");
+    }
+    setMdBusy(false);
+  };
+
+  // Read a picked .md/.txt file into the textarea (client-side); the user can
+  // review and then Add. FileReader keeps it keyless and offline-friendly.
+  const onPickMdFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setMdText(typeof reader.result === "string" ? reader.result : "");
+      setMdTitle((t) =>
+        t.trim()
+          ? t
+          : file.name.replace(/\.(md|markdown|txt)$/i, "").replace(/[-_]+/g, " ").trim()
+      );
+    };
+    reader.readAsText(file);
   };
 
   const retry = async (itemId: string) => {
@@ -94,8 +135,7 @@ export default function Library({
   const items = topic.library ?? [];
   const q = query.trim().toLowerCase();
   const filtered = items.filter((item) => {
-    if (statusFilter === "unread" && item.status !== "unread") return false;
-    if (statusFilter === "done" && item.status !== "done") return false;
+    if (statusFilter !== "all" && item.status !== statusFilter) return false;
     if (kindFilter !== "all" && item.kind !== kindFilter) return false;
     if (q && !`${item.title} ${item.siteName ?? ""}`.toLowerCase().includes(q)) return false;
     return true;
@@ -201,9 +241,79 @@ export default function Library({
             </div>
           )}
         </div>
+
+        <div style={{ marginTop: 12, borderTop: `1px solid ${C.line}`, paddingTop: 10 }}>
+          <button
+            onClick={() => setMdOpen(!mdOpen)}
+            style={{
+              background: "none",
+              border: "none",
+              color: C.dim,
+              fontFamily: sans,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            Paste or upload Markdown {mdOpen ? "▾" : "▸"}
+          </button>
+          {mdOpen && (
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+              <input
+                value={mdTitle}
+                onChange={(e) => setMdTitle(e.target.value)}
+                placeholder="Title (optional — the first heading is used otherwise)"
+                style={{
+                  background: C.bg,
+                  border: `1px solid ${C.line}`,
+                  borderRadius: 10,
+                  padding: "8px 12px",
+                  color: C.ink,
+                  fontSize: 16,
+                  fontFamily: sans,
+                  outline: "none",
+                }}
+              />
+              <textarea
+                value={mdText}
+                onChange={(e) => setMdText(e.target.value)}
+                placeholder="Paste Markdown here — e.g. an LLM-generated summary or notes."
+                rows={6}
+                style={{
+                  background: C.bg,
+                  border: `1px solid ${C.line}`,
+                  borderRadius: 10,
+                  padding: "10px 12px",
+                  color: C.ink,
+                  fontSize: 16,
+                  fontFamily: sans,
+                  lineHeight: 1.5,
+                  resize: "vertical",
+                  outline: "none",
+                }}
+              />
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <label style={{ ...chip(false), display: "inline-flex", alignItems: "center" }}>
+                  📄 Upload .md file
+                  <input
+                    type="file"
+                    accept=".md,.markdown,.txt,text/markdown,text/plain"
+                    onChange={onPickMdFile}
+                    style={{ display: "none" }}
+                  />
+                </label>
+                <Btn onClick={addMarkdown} disabled={mdBusy || !mdText.trim() || !online}>
+                  {mdBusy ? "Adding..." : "Add to library"}
+                </Btn>
+              </div>
+              {mdError && <div style={{ color: C.danger, fontSize: 13 }}>{mdError}</div>}
+            </div>
+          )}
+        </div>
       </Card>
 
-      {items.length >= 4 && (
+      {items.length >= 2 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <input
             value={query}
@@ -225,6 +335,7 @@ export default function Library({
               [
                 ["all", "All"],
                 ["unread", "Unread"],
+                ["reading", "Reading"],
                 ["done", "Done"],
               ] as [StatusFilter, string][]
             ).map(([key, label]) => (
