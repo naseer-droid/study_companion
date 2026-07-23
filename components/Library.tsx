@@ -5,6 +5,7 @@ import type { LibraryItem, Topic } from "@/lib/types";
 import { extractionState } from "@/lib/types";
 import { C, sans, Card, Eyebrow, Btn, Spinner } from "./lamp-ui";
 import BookSearch, { type BookPick } from "./BookSearch";
+import SuggestPanel from "./SuggestPanel";
 import type { SourceKind } from "./SourceSearch";
 
 const statusLabel: Record<LibraryItem["status"], string> = {
@@ -63,6 +64,7 @@ export default function Library({
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
   const [findOpen, setFindOpen] = useState(false);
   const [bookSearchOpen, setBookSearchOpen] = useState(false);
+  const [suggestOpen, setSuggestOpen] = useState(false);
 
   const add = async () => {
     const u = url.trim();
@@ -126,7 +128,7 @@ export default function Library({
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && add()}
-            placeholder="Paste an article, YouTube, Drive or .epub/.txt book link..."
+            placeholder="Paste an article, video, or a Drive / .epub / .pdf / .txt book link..."
             style={{
               flex: 1,
               minWidth: 0,
@@ -152,9 +154,9 @@ export default function Library({
         {error && <div style={{ marginTop: 10, color: C.danger, fontSize: 13 }}>{error}</div>}
         <div style={{ marginTop: 10, fontSize: 12, color: C.dim, lineHeight: 1.5 }}>
           The card appears right away; pulling out the text keeps working in the background, so
-          feel free to move on. Articles open in a clean reader, videos play right here (with the
-          transcript), books read page by page — including Google Drive or public .epub/.txt links.
-          The companion reads along either way.
+          feel free to move on. Articles open in a clean reader, videos (YouTube, Vimeo and more)
+          play right here, books read page by page — including Google Drive or public
+          .epub / .pdf / .txt links. The companion reads along either way.
         </div>
 
         <div style={{ marginTop: 12, borderTop: `1px solid ${C.line}`, paddingTop: 10 }}>
@@ -192,6 +194,9 @@ export default function Library({
               ))}
               <button onClick={() => setBookSearchOpen(true)} style={chip(false)}>
                 📚 Books
+              </button>
+              <button onClick={() => setSuggestOpen(true)} style={chip(false)}>
+                ✨ Suggest books
               </button>
             </div>
           )}
@@ -427,6 +432,15 @@ export default function Library({
           online={online}
           onPick={onAddBook}
           onClose={() => setBookSearchOpen(false)}
+        />
+      )}
+
+      {suggestOpen && (
+        <SuggestPanel
+          topicId={topic.id}
+          online={online}
+          onPick={onAddBook}
+          onClose={() => setSuggestOpen(false)}
         />
       )}
     </div>

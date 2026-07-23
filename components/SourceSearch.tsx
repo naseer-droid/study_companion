@@ -19,9 +19,55 @@ type DiscoverResult = {
   thumbnail?: string;
   channel?: string;
   duration?: string;
+  views?: number;
+  ageText?: string;
+  publishedAt?: string;
   snippet?: string;
   siteName?: string;
 };
+
+const compactViews = (n?: number): string | undefined =>
+  typeof n === "number" && Number.isFinite(n)
+    ? new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n)
+    : undefined;
+
+// Relative age from an ISO date (API path); the scrape path already gives text.
+const relativeAge = (iso?: string): string | undefined => {
+  if (!iso) return undefined;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return undefined;
+  const days = Math.floor((Date.now() - t) / 86_400_000);
+  if (days < 1) return "today";
+  if (days < 30) return `${days} day${days > 1 ? "s" : ""} ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} month${months > 1 ? "s" : ""} ago`;
+  const years = Math.floor(days / 365);
+  return `${years} year${years > 1 ? "s" : ""} ago`;
+};
+
+const videoMeta = (r: DiscoverResult): string => {
+  const parts: string[] = [];
+  const v = compactViews(r.views);
+  if (v) parts.push(`${v} views`);
+  const age = r.ageText || relativeAge(r.publishedAt);
+  if (age) parts.push(age);
+  if (r.duration) parts.push(r.duration);
+  if (r.channel) parts.push(r.channel);
+  return parts.join(" · ");
+};
+
+const hostOf = (url: string): string => {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+};
+
+// Article group headers, in display order. Anything unrecognised is "Web".
+const ARTICLE_GROUPS = ["Web", "Medium", "dev.to", "Wikipedia"] as const;
+const groupOf = (r: DiscoverResult): (typeof ARTICLE_GROUPS)[number] =>
+  r.siteName === "Medium" || r.siteName === "dev.to" || r.siteName === "Wikipedia" ? r.siteName : "Web";
 
 export default function SourceSearch({
   topic,
@@ -122,6 +168,106 @@ export default function SourceSearch({
     whiteSpace: "nowrap",
   });
 
+  const renderRow = (r: DiscoverResult) => {
+    const key = urlKey(r.url);
+    const added = addedKeys.has(key) || inLibrary.has(key);
+    const meta = kind === "video" ? videoMeta(r) : hostOf(r.url);
+    return (
+      <div
+        key={key}
+        style={{
+          display: "flex",
+          gap: 12,
+          alignItems: "center",
+          borderTop: `1px solid ${C.line}`,
+          paddingTop: 10,
+        }}
+      >
+        {kind === "video" &&
+          (r.thumbnail ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={r.thumbnail}
+              alt=""
+              style={{
+                width: 84,
+                height: 56,
+                objectFit: "cover",
+                borderRadius: 8,
+                flexShrink: 0,
+                background: C.bg,
+              }}
+            />
+          ) : (
+            <div
+              style={{
+                width: 84,
+                height: 56,
+                borderRadius: 8,
+                flexShrink: 0,
+                background: C.bg,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: C.dim,
+                fontSize: 18,
+              }}
+            >
+              ▶
+            </div>
+          ))}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <a
+            href={readerUrl(r.url)}
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              fontFamily: serif,
+              fontSize: 15,
+              lineHeight: 1.35,
+              color: C.ink,
+              textDecoration: "none",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
+            {r.title} <span style={{ color: C.dim, fontSize: 12 }}>↗</span>
+          </a>
+          {meta && (
+            <div style={{ marginTop: 3, fontSize: 12, color: C.dim, fontFamily: sans }}>{meta}</div>
+          )}
+          {r.snippet && (
+            <div
+              style={{
+                marginTop: 3,
+                fontSize: 12,
+                color: C.dim,
+                fontFamily: sans,
+                lineHeight: 1.45,
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+              }}
+            >
+              {r.snippet}
+            </div>
+          )}
+        </div>
+        <Btn
+          variant={added ? "ghost" : "solid"}
+          onClick={() => void add(r)}
+          disabled={addingKey !== null || added || !online}
+          style={{ padding: "7px 12px", fontSize: 13, flexShrink: 0 }}
+        >
+          {added ? "Added ✓" : addingKey === key ? "Adding..." : "Add"}
+        </Btn>
+      </div>
+    );
+  };
+
   return (
     <div
       onClick={onClose}
@@ -221,104 +367,34 @@ export default function SourceSearch({
             </div>
           )}
 
-          {results && !searching && results.length > 0 && (
+          {results && !searching && results.length > 0 && kind === "video" && (
             <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-              {results.map((r) => {
-                const key = urlKey(r.url);
-                const added = addedKeys.has(key) || inLibrary.has(key);
+              {results.map((r) => renderRow(r))}
+            </div>
+          )}
+
+          {results && !searching && results.length > 0 && kind === "article" && (
+            <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 16 }}>
+              {ARTICLE_GROUPS.map((g) => {
+                const rows = results.filter((r) => groupOf(r) === g);
+                if (!rows.length) return null;
                 return (
-                  <div
-                    key={key}
-                    style={{
-                      display: "flex",
-                      gap: 12,
-                      alignItems: "center",
-                      borderTop: `1px solid ${C.line}`,
-                      paddingTop: 10,
-                    }}
-                  >
-                    {kind === "video" &&
-                      (r.thumbnail ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={r.thumbnail}
-                          alt=""
-                          style={{
-                            width: 84,
-                            height: 56,
-                            objectFit: "cover",
-                            borderRadius: 8,
-                            flexShrink: 0,
-                            background: C.bg,
-                          }}
-                        />
-                      ) : (
-                        <div
-                          style={{
-                            width: 84,
-                            height: 56,
-                            borderRadius: 8,
-                            flexShrink: 0,
-                            background: C.bg,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            color: C.dim,
-                            fontSize: 18,
-                          }}
-                        >
-                          ▶
-                        </div>
-                      ))}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <a
-                        href={readerUrl(r.url)}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{
-                          fontFamily: serif,
-                          fontSize: 15,
-                          lineHeight: 1.35,
-                          color: C.ink,
-                          textDecoration: "none",
-                          display: "-webkit-box",
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: "vertical",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {r.title} <span style={{ color: C.dim, fontSize: 12 }}>↗</span>
-                      </a>
-                      <div style={{ marginTop: 3, fontSize: 12, color: C.dim, fontFamily: sans }}>
-                        {(r.channel || r.siteName) ?? ""}
-                        {r.duration ? ` · ${r.duration}` : ""}
-                      </div>
-                      {r.snippet && (
-                        <div
-                          style={{
-                            marginTop: 3,
-                            fontSize: 12,
-                            color: C.dim,
-                            fontFamily: sans,
-                            lineHeight: 1.45,
-                            display: "-webkit-box",
-                            WebkitLineClamp: 2,
-                            WebkitBoxOrient: "vertical",
-                            overflow: "hidden",
-                          }}
-                        >
-                          {r.snippet}
-                        </div>
-                      )}
-                    </div>
-                    <Btn
-                      variant={added ? "ghost" : "solid"}
-                      onClick={() => void add(r)}
-                      disabled={addingKey !== null || added || !online}
-                      style={{ padding: "7px 12px", fontSize: 13, flexShrink: 0 }}
+                  <div key={g}>
+                    <div
+                      style={{
+                        fontFamily: sans,
+                        fontSize: 12,
+                        fontWeight: 700,
+                        letterSpacing: "0.08em",
+                        textTransform: "uppercase",
+                        color: C.dim,
+                      }}
                     >
-                      {added ? "Added ✓" : addingKey === key ? "Adding..." : "Add"}
-                    </Btn>
+                      {g}
+                    </div>
+                    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 10 }}>
+                      {rows.map((r) => renderRow(r))}
+                    </div>
                   </div>
                 );
               })}

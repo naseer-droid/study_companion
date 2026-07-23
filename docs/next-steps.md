@@ -71,6 +71,46 @@ Things only you can do. Tick them here **and** update the matching line in
   - *Verify:* opens full-screen with the lamp icon; airplane mode still shows
     your topics read-only with the offline banner.
 
+## v3.7 PDF books + richer discovery — new owner actions (2026-07-23)
+
+v3.7 (1) **rolls back** the v3.6 Drive-folder "My Collection" scan — it never
+landed on your large Calibre library, so we're back to **paste-the-book-link**;
+(2) adds **PDF books** (paste a Drive or public `.pdf` link, same as .epub/.txt);
+(3) shows **views + age** on YouTube results; (4) makes **article search
+multi-source + grouped** (Web / Medium / dev.to / Wikipedia); (5) revamps
+**✨ Suggest books** into one rich list with covers/ratings (Add a public-domain
+pick to read in-app, Save-for-later, or Find-a-copy externally); and (6) **embeds
+non-YouTube video** (Vimeo, Dailymotion, Vidyard, direct .mp4/.webm/.ogv).
+**No new required env vars** — Google Books, dev.to and Wikipedia are keyless;
+`YOUTUBE_API_KEY` (from v3.5) still recommended for reliable video search.
+
+- [ ] **Push + redeploy** — no schema change is required for v3.7.
+  - *Why only you:* pushing is your pre-deploy step (per our workflow).
+
+- [ ] **(Optional) Drop the now-unused collection tables** in the Supabase SQL
+  editor — v3.7 removed the collection feature, so these tables are dead:
+  ```sql
+  drop table if exists public.collection_books;
+  drop table if exists public.collection_settings;
+  ```
+  Harmless to leave them (RLS-scoped, likely empty); this is just cleanup.
+
+- [ ] **Verify on the phone** after redeploy:
+  - Paste a public **PDF** link (e.g. an arxiv.org `.pdf`) → the card resolves
+    and reads page by page. A scanned/image PDF shows "couldn't open" + Retry
+    (expected — no text layer).
+  - Library → **Find more** → ▶ Videos → results show **views · age · duration ·
+    channel**.
+  - Same panel → 📄 Articles → results are **grouped** under Web / Medium /
+    dev.to / Wikipedia headers.
+  - Library → **✨ Suggest books** → cards show **covers + ratings**; a
+    public-domain pick **Adds** and reads in-app; a modern book **Saves for
+    later** as a link-only card, with **Find a copy ↗** to go get it (then paste
+    the Drive/.epub/.pdf link into the shelf).
+  - Paste a **Vimeo**, **Dailymotion**, **Vidyard** (`hubs.vidyard.com/watch/…`)
+    or direct **.mp4** link → the card is a video that **plays embedded**;
+    discussion works from the title.
+
 ## v3.5 source discovery — new owner actions (2026-07-20)
 
 v3.5 (real in-app search for sources: the Library "Find more" chips and the

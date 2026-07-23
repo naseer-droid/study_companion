@@ -4,6 +4,7 @@ import { getRequestStorage } from "@/lib/storage";
 import { readerUrl } from "@/lib/links";
 import { youtubeVideoId, quickYouTubeMeta, extractAndStore, assertPublicHttpUrl } from "@/lib/extract";
 import { driveFileId, retryBookProbe } from "@/lib/books";
+import { videoEmbed, videoEmbedMeta } from "@/lib/embed";
 import type { BookSource } from "@/lib/types";
 
 // Ingestion: paste a URL → the item is saved and returned IMMEDIATELY with
@@ -79,18 +80,22 @@ async function handleAdd(req: Request) {
     return NextResponse.json({ item });
   }
 
-  // A public .txt/.epub URL (Standard Ebooks, archive.org public-domain, or
-  // self-hosted) becomes a streamed book like Drive: saved instantly, opened
-  // by a background probe. The SSRF guard refuses private/loopback addresses;
-  // no book text is ever stored.
+  // A public .txt/.epub/.pdf URL (Standard Ebooks, archive.org public-domain,
+  // arxiv, or self-hosted) becomes a streamed book like Drive: saved instantly,
+  // opened by a background probe. The SSRF guard refuses private/loopback
+  // addresses; no book text is ever stored.
   const lowerPath = parsed.pathname.toLowerCase();
-  if (lowerPath.endsWith(".epub") || lowerPath.endsWith(".txt")) {
+  if (lowerPath.endsWith(".epub") || lowerPath.endsWith(".txt") || lowerPath.endsWith(".pdf")) {
     try {
       assertPublicHttpUrl(parsed.toString());
     } catch {
       return NextResponse.json({ error: "That address can't be fetched." }, { status: 400 });
     }
-    const format: "txt" | "epub" = lowerPath.endsWith(".epub") ? "epub" : "txt";
+    const format: "txt" | "epub" | "pdf" = lowerPath.endsWith(".epub")
+      ? "epub"
+      : lowerPath.endsWith(".pdf")
+        ? "pdf"
+        : "txt";
     const rawName = decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || "Ebook");
     const item = await ctx.storage.addLibraryItem(
       ctx.userId,
@@ -98,7 +103,7 @@ async function handleAdd(req: Request) {
       {
         kind: "book",
         url: parsed.toString(),
-        title: rawName.replace(/\.(txt|epub)$/i, "").replace(/[-_]+/g, " ").trim() || "Ebook",
+        title: rawName.replace(/\.(txt|epub|pdf)$/i, "").replace(/[-_]+/g, " ").trim() || "Ebook",
         addedAt: new Date().toISOString(),
         status: "unread",
         siteName: parsed.hostname.replace(/^www\./, ""),
@@ -118,18 +123,39 @@ async function handleAdd(req: Request) {
   // URL (and the reader's "Original" link) opens the readable version.
   const effectiveUrl = readerUrl(parsed.toString());
   const videoId = youtubeVideoId(parsed);
-  const kind: "article" | "youtube" = videoId ? "youtube" : "article";
+  // Non-YouTube embeddable video (Vimeo/Dailymotion/Vidyard/direct file) reuses
+  // the "youtube" kind (the schema allows only article/youtube/book; siteName
+  // shows the real host). It has no transcript — the reader plays the embed and
+  // the companion discusses from the title.
+  const embed = videoId ? null : videoEmbed(parsed);
+  const kind: "article" | "youtube" = videoId || embed ? "youtube" : "article";
 
   // Quick metadata only — enough for a presentable card right now. YouTube's
-  // oEmbed is fast and unblocked; articles start as their hostname and get
-  // the real title when extraction lands.
-  const provisional = videoId
-    ? await quickYouTubeMeta(effectiveUrl, videoId)
-    : {
-        title: parsed.hostname.replace(/^www\./, ""),
-        siteName: undefined as string | undefined,
-        thumbnail: undefined as string | undefined,
-      };
+  // oEmbed is fast and unblocked; other video hosts get a best-effort oEmbed
+  // title; articles start as their hostname and get the real title when
+  // extraction lands.
+  let provisional: { title: string; siteName?: string; thumbnail?: string };
+  if (videoId) {
+    provisional = await quickYouTubeMeta(effectiveUrl, videoId);
+  } else if (embed) {
+    const meta = await videoEmbedMeta(effectiveUrl, embed);
+    // Direct video files have no oEmbed — derive a readable title from the
+    // filename so the companion has something better than the bare host.
+    const fileTitle =
+      embed.kind === "file"
+        ? decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || "")
+            .replace(/\.(mp4|webm|ogv)$/i, "")
+            .replace(/[-_]+/g, " ")
+            .trim()
+        : "";
+    provisional = {
+      title: meta.title || fileTitle || parsed.hostname.replace(/^www\./, ""),
+      siteName: embed.host,
+      thumbnail: meta.thumbnail,
+    };
+  } else {
+    provisional = { title: parsed.hostname.replace(/^www\./, ""), siteName: undefined, thumbnail: undefined };
+  }
 
   const item = await ctx.storage.addLibraryItem(
     ctx.userId,
@@ -143,34 +169,43 @@ async function handleAdd(req: Request) {
       siteName: provisional.siteName,
       thumbnail: provisional.thumbnail,
       hasContent: false,
-      extraction: "pending",
+      // Non-YouTube embeds have nothing to extract — mark terminal so the reader
+      // shows the player + discuss-from-title rather than a stuck "pending".
+      extraction: embed ? "ok" : "pending",
     },
     ""
   );
 
-  // ctx is captured here, BEFORE the response goes out — after() callbacks
-  // must not touch cookies()/headers(), but the already-authed storage client
-  // stays valid for the function's lifetime.
-  after(async () => {
-    await extractAndStore(ctx.storage, ctx.userId, {
-      id: item.id,
-      url: effectiveUrl,
-      kind,
+  // Only run the extraction pipeline for real articles / YouTube (transcript).
+  // ctx is captured here, BEFORE the response goes out — after() callbacks must
+  // not touch cookies()/headers(), but the already-authed storage client stays
+  // valid for the function's lifetime.
+  if (!embed) {
+    after(async () => {
+      await extractAndStore(ctx.storage, ctx.userId, {
+        id: item.id,
+        url: effectiveUrl,
+        kind,
+      });
     });
-  });
+  }
 
   return NextResponse.json({ item });
 }
 
-// Book picked from the in-app search. Gutenberg books stream in the reader
-// (hasContent=true, text resolved live); Open Library has no full text, so
-// those stay link-only cards the learner opens externally.
+// Book picked from the in-app search / suggestions. Gutenberg books stream in
+// the reader (hasContent=true, text resolved live); Open Library / Google Books
+// have no full text, so those stay link-only cards the learner opens externally
+// (or fetches themselves and pastes the Drive/.epub/.pdf link into the shelf).
 async function addPickedBook(
   ctx: NonNullable<Awaited<ReturnType<typeof getRequestStorage>>>,
   topicId: string,
   book: Record<string, unknown>
 ) {
-  const provider = book.provider === "gutenberg" || book.provider === "openlibrary" ? book.provider : null;
+  const provider =
+    book.provider === "gutenberg" || book.provider === "openlibrary"
+      ? book.provider
+      : null;
   const ref = typeof book.ref === "string" ? book.ref : "";
   const title = typeof book.title === "string" ? book.title.trim() : "";
   const url = typeof book.url === "string" ? book.url : "";

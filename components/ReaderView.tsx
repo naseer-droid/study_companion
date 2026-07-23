@@ -4,6 +4,7 @@ import { ReactNode, useEffect, useRef, useState } from "react";
 import type { LibraryItem } from "@/lib/types";
 import { extractionState, parseTranscript, looksLikeHtml } from "@/lib/types";
 import { FREEDIUM_MIRROR } from "@/lib/links";
+import { videoEmbed } from "@/lib/embed";
 import { C, serif, sans, Btn, Spinner } from "./lamp-ui";
 
 // Compact A−/A+ font-size control in the reader header.
@@ -485,6 +486,18 @@ export default function ReaderView({
   };
 
   const embed = item.kind === "youtube" ? youtubeEmbed(item.url) : null;
+  // Non-YouTube video hosts (Vimeo/Dailymotion/Vidyard/direct file) also carry
+  // kind "youtube"; when it isn't a real YouTube URL, resolve their player here.
+  const otherEmbed =
+    item.kind === "youtube" && !embed
+      ? (() => {
+          try {
+            return videoEmbed(new URL(item.url));
+          } catch {
+            return null;
+          }
+        })()
+      : null;
 
   const onMainScroll = () => {
     setPill(null);
@@ -624,11 +637,37 @@ export default function ReaderView({
                     style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0 }}
                   />
                 </div>
+              ) : otherEmbed ? (
+                otherEmbed.kind === "file" ? (
+                  <video
+                    src={otherEmbed.embedUrl}
+                    controls
+                    style={{ width: "100%", borderRadius: 12, background: "#000", display: "block" }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      position: "relative",
+                      paddingTop: "56.25%",
+                      borderRadius: 12,
+                      overflow: "hidden",
+                      background: "#000",
+                    }}
+                  >
+                    <iframe
+                      src={otherEmbed.embedUrl}
+                      title={item.title}
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+                      allowFullScreen
+                      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0 }}
+                    />
+                  </div>
+                )
               ) : (
                 <div style={{ color: C.dim, fontSize: 14, fontFamily: sans, lineHeight: 1.6 }}>
                   This video can&apos;t be embedded —{" "}
                   <a href={item.url} target="_blank" rel="noreferrer" style={{ color: C.amber }}>
-                    watch it on YouTube ↗
+                    open it in a new tab ↗
                   </a>{" "}
                   and come back to discuss it.
                 </div>

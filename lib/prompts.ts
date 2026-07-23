@@ -176,6 +176,25 @@ Respond ONLY with valid JSON, no markdown fences, in exactly this shape:
 }`;
 }
 
+// ---------------------------------------------------------------------------
+// Book suggestions (v3.7). Names the genuinely good, well-known books for the
+// topic — canonical texts plus one readable entry point. The route enriches
+// each with Google Books cover/rating/blurb and, when public-domain, a
+// one-tap Gutenberg reader pick; anything else becomes a link-only card the
+// learner can save or go find a copy of.
+// ---------------------------------------------------------------------------
+export function bookSuggestPrompt(topic: string, openSteps: string[]): string {
+  const steps = openSteps.length ? openSteps.map((s) => `- ${s}`).join("\n") : "(just starting out)";
+  return `You are a warm, well-read learning companion recommending the best books to read for "${topic}".
+Roadmap stages the learner hasn't done yet:
+${steps}
+Respond ONLY with valid JSON, no markdown fences, in exactly this shape:
+{
+ "books": [ { "title": "real book title", "author": "real author", "why": "one short sentence tying it to where they are now" } ]
+}
+Rules: recommend 4-6 genuinely well-known, real books that actually exist — the canonical/standard texts a knowledgeable person would name for this topic, plus at least one readable beginner-friendly entry point. Use exact real titles and authors (no invented books). Order them from most approachable to most advanced. Each "why" is one short, specific sentence.`;
+}
+
 export function greetingPrompt(
   topic: string,
   memory: string,

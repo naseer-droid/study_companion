@@ -91,6 +91,17 @@ function callMock(prompt: string): string {
       greeting: "Mock greeting: last time we were working through the middle stages — want to pick up there, or revisit what felt shaky?",
     });
   }
+  // Book suggestions (v3.7) mock: a real public-domain title (so the Gutendex
+  // resolve + in-app Add path is exercised without a key) plus a modern one
+  // (which stays a link-only "save/find a copy" card).
+  if (prompt.includes("best books to read for")) {
+    return JSON.stringify({
+      books: [
+        { title: "Pride and Prejudice", author: "Jane Austen", why: "A readable public-domain classic to warm up on." },
+        { title: "The Pragmatic Programmer", author: "Andrew Hunt", why: "A modern standard text for the topic." },
+      ],
+    });
+  }
   return JSON.stringify({
     answer: "Mock answer: in plain terms, the thing you asked about works by combining a few simple parts. For example, imagine a tiny version of it with just two pieces.",
     updatedMemory: "Mock memory: the learner asked a question and we noted the key takeaway.",

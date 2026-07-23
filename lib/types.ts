@@ -45,7 +45,7 @@ export type DiscussionMsg = {
 export type BookSource = {
   provider: "gutenberg" | "openlibrary" | "drive" | "remote";
   ref: string;
-  format?: "txt" | "epub"; // drive/remote only; probed in the background after add
+  format?: "txt" | "epub" | "pdf"; // drive/remote only; probed in the background after add
   textUrl?: string; // gutenberg/remote: plain-text or .epub URL fetched server-side
 };
 

@@ -136,11 +136,15 @@ export async function fetchRemoteFile(url: string): Promise<Uint8Array> {
   return bytes;
 }
 
-function sniffFormat(bytes: Uint8Array): "epub" | "txt" {
-  // Zip magic "PK\x03\x04" → epub; anything else is treated as text.
-  return bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04
-    ? "epub"
-    : "txt";
+function sniffFormat(bytes: Uint8Array): "epub" | "txt" | "pdf" {
+  // Zip magic "PK\x03\x04" → epub; "%PDF-" → pdf; anything else is text.
+  if (bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
+    return "epub";
+  }
+  if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46 && bytes[4] === 0x2d) {
+    return "pdf";
+  }
+  return "txt";
 }
 
 function decodeText(bytes: Uint8Array): string {
@@ -217,6 +221,57 @@ async function epubChapters(bytes: Uint8Array): Promise<{ chapters: string[]; ti
   }
   if (!chapters.length) throw new Error("epub had no readable chapters");
   return { chapters, title };
+}
+
+// ---------------------------------------------------------------------------
+// PDF text extraction: pull the text layer page by page. Scanned/image-only
+// PDFs have no text layer — we throw, which lands as extraction "failed" so the
+// card falls back to a link the learner opens externally (the designed path).
+// pdfjs is lazily imported so cold routes never pay for it (as with fflate/jsdom).
+// ---------------------------------------------------------------------------
+async function pdfText(bytes: Uint8Array): Promise<string> {
+  const [pdfjs, path, { existsSync }] = await Promise.all([
+    import("pdfjs-dist/legacy/build/pdf.mjs"),
+    import("path"),
+    import("fs"),
+  ]);
+  // Under Node, pdf.js auto-disables the web worker and runs its parser on the
+  // main thread (dynamically importing the sibling pdf.worker.mjs) — no worker
+  // config needed. isEvalSupported:false keeps it CSP-safe in serverless.
+  const params: {
+    data: Uint8Array;
+    isEvalSupported: boolean;
+    standardFontDataUrl?: string;
+    cMapUrl?: string;
+    cMapPacked?: boolean;
+  } = { data: bytes, isEvalSupported: false };
+  // Best-effort: point the standard-font + CMap factories at the package's
+  // bundled data so glyphs map to correct Unicode (standard-14 fonts / CID
+  // text). node_modules sits at cwd in dev and on Vercel; only wire it when the
+  // dirs actually exist — a bad path would make pdf.js throw on those PDFs, and
+  // extraction works without it for the common (embedded-font) case.
+  const fontsRoot = path.join(process.cwd(), "node_modules", "pdfjs-dist");
+  if (existsSync(path.join(fontsRoot, "standard_fonts"))) {
+    params.standardFontDataUrl = path.join(fontsRoot, "standard_fonts") + path.sep;
+    params.cMapUrl = path.join(fontsRoot, "cmaps") + path.sep;
+    params.cMapPacked = true;
+  }
+  const doc = await pdfjs.getDocument(params).promise;
+  const pages: string[] = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const content = await page.getTextContent();
+    const text = content.items
+      .map((item) => ("str" in item ? item.str : ""))
+      .join(" ")
+      .replace(/[ \t]+/g, " ")
+      .trim();
+    if (text) pages.push(text);
+  }
+  await doc.destroy();
+  const out = pages.join("\n\n").trim();
+  if (!out) throw new Error("this PDF has no readable text layer");
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,18 +353,24 @@ export async function loadBook(src: BookSource): Promise<{ chunks: string[]; tit
     value = { chunks: chunkPlainText(text) };
   } else if (src.provider === "drive") {
     const { bytes, filename } = await fetchDriveFile(src.ref);
-    if (sniffFormat(bytes) === "epub") {
+    const fmt = sniffFormat(bytes);
+    if (fmt === "epub") {
       const { chapters, title } = await epubChapters(bytes);
       value = { chunks: chunkChapters(chapters), title: title ?? filename };
+    } else if (fmt === "pdf") {
+      value = { chunks: chunkPlainText(await pdfText(bytes)), title: filename };
     } else {
       value = { chunks: chunkPlainText(decodeText(bytes)), title: filename };
     }
   } else if (src.provider === "remote") {
     if (!src.textUrl) throw new Error("this book has no readable text");
     const bytes = await fetchRemoteFile(src.textUrl);
-    if (sniffFormat(bytes) === "epub") {
+    const fmt = sniffFormat(bytes);
+    if (fmt === "epub") {
       const { chapters, title } = await epubChapters(bytes);
       value = { chunks: chunkChapters(chapters), title };
+    } else if (fmt === "pdf") {
+      value = { chunks: chunkPlainText(await pdfText(bytes)) };
     } else {
       value = { chunks: chunkPlainText(decodeText(bytes)) };
     }
@@ -362,13 +423,20 @@ export async function retryBookProbe(
   try {
     const { bytes, filename } = await fetchDriveFile(drive.ref);
     const format = sniffFormat(bytes);
-    let title = filename?.replace(/\.(txt|epub)$/i, "");
+    let title = filename?.replace(/\.(txt|epub|pdf)$/i, "");
     if (format === "epub") {
       const parsed = await epubChapters(bytes); // throws if unreadable
       title = parsed.title ?? title;
       memo = {
         key: `drive:${drive.ref}`,
         value: { chunks: chunkChapters(parsed.chapters), title },
+      };
+    } else if (format === "pdf") {
+      // Confirm a text layer exists (scanned PDFs throw → extraction "failed").
+      const text = await pdfText(bytes);
+      memo = {
+        key: `drive:${drive.ref}`,
+        value: { chunks: chunkPlainText(text), title },
       };
     }
     const patch = {

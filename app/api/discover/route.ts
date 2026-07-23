@@ -17,10 +17,13 @@ export const maxDuration = 30;
 export type DiscoverResult = {
   title: string;
   url: string;
-  source: "youtube-api" | "youtube" | "jina" | "ddg";
+  source: "youtube-api" | "youtube" | "jina" | "ddg" | "devto" | "wikipedia";
   thumbnail?: string;
   channel?: string;
   duration?: string;
+  views?: number; // video view count (best-effort)
+  ageText?: string; // relative upload age from the scrape path ("3 years ago")
+  publishedAt?: string; // ISO upload date from the API path
   snippet?: string;
   siteName?: string;
 };
@@ -78,6 +81,7 @@ async function videosViaApi(q: string, key: string): Promise<DiscoverResult[]> {
     snippet?: {
       title?: string;
       channelTitle?: string;
+      publishedAt?: string;
       thumbnails?: { medium?: { url?: string } };
     };
   };
@@ -93,33 +97,39 @@ async function videosViaApi(q: string, key: string): Promise<DiscoverResult[]> {
       source: "youtube-api",
       thumbnail: it.snippet.thumbnails?.medium?.url,
       channel: it.snippet.channelTitle ? decodeEntities(it.snippet.channelTitle) : undefined,
+      publishedAt: it.snippet.publishedAt || undefined,
     });
   }
 
-  // One cheap batch call turns ISO8601 durations into "12:34" badges.
+  // One cheap batch call adds duration ("12:34") + view counts — statistics and
+  // contentDetails ride the same 1-unit videos.list request.
   if (results.length) {
     try {
       const ids = results.map((r) => new URL(r.url).searchParams.get("v")).join(",");
       const dRes = await fetch(
-        `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${ids}&key=${key}`,
+        `https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails&id=${ids}&key=${key}`,
         { signal: AbortSignal.timeout(8_000) }
       );
       if (dRes.ok) {
         const dData = await dRes.json();
-        const byId = new Map<string, string>();
+        const byId = new Map<string, { duration?: string; views?: number }>();
         for (const v of dData.items ?? []) {
-          if (v.id && v.contentDetails?.duration) {
-            byId.set(v.id, formatIsoDuration(v.contentDetails.duration));
-          }
+          if (!v.id) continue;
+          const views = v.statistics?.viewCount ? Number(v.statistics.viewCount) : undefined;
+          byId.set(v.id, {
+            duration: v.contentDetails?.duration ? formatIsoDuration(v.contentDetails.duration) : undefined,
+            views: Number.isFinite(views) ? views : undefined,
+          });
         }
         for (const r of results) {
           const id = new URL(r.url).searchParams.get("v") ?? "";
-          const dur = byId.get(id);
-          if (dur) r.duration = dur;
+          const stat = byId.get(id);
+          if (stat?.duration) r.duration = stat.duration;
+          if (stat?.views !== undefined) r.views = stat.views;
         }
       }
     } catch {
-      // durations are decoration — results stand without them
+      // stats are decoration — results stand without them
     }
   }
   return results;
@@ -172,6 +182,9 @@ function collectVideoRenderers(node: unknown, out: DiscoverResult[]) {
     if (title) {
       const thumbs = (vr.thumbnail as { thumbnails?: { url?: string }[] } | undefined)
         ?.thumbnails;
+      const simpleOrRun = (v: unknown): string =>
+        (v as { simpleText?: string } | undefined)?.simpleText || runText(v);
+      const viewText = simpleOrRun(vr.shortViewCountText); // "1.2M views"
       out.push({
         title,
         url: `https://www.youtube.com/watch?v=${vr.videoId}`,
@@ -180,6 +193,8 @@ function collectVideoRenderers(node: unknown, out: DiscoverResult[]) {
         channel: runText(vr.ownerText) || runText(vr.longBylineText) || undefined,
         duration:
           (vr.lengthText as { simpleText?: string } | undefined)?.simpleText || undefined,
+        views: parseCompactCount(viewText),
+        ageText: simpleOrRun(vr.publishedTimeText) || undefined, // "3 years ago"
       });
     }
     return; // don't descend into a matched renderer
@@ -189,7 +204,23 @@ function collectVideoRenderers(node: unknown, out: DiscoverResult[]) {
 
 // -------------------------------------------------------------- articles ---
 
+// Multi-source (v3.7): a general web SERP plus Medium, dev.to and Wikipedia,
+// each independent and best-effort. allSettled means one slow/failed source
+// never sinks the others; the client groups results by siteName.
 async function searchArticles(q: string): Promise<DiscoverResult[]> {
+  const settled = await Promise.allSettled([
+    webArticles(q),
+    mediumArticles(q),
+    devtoArticles(q),
+    wikipediaArticles(q),
+  ]);
+  const merged: DiscoverResult[] = [];
+  for (const r of settled) if (r.status === "fulfilled") merged.push(...r.value);
+  return merged;
+}
+
+// The general "Web" group: the keyed Jina SERP, DuckDuckGo when it's absent.
+async function serpArticles(q: string): Promise<DiscoverResult[]> {
   if (process.env.JINA_API_KEY) {
     try {
       const viaJina = await articlesViaJina(q, process.env.JINA_API_KEY);
@@ -199,6 +230,96 @@ async function searchArticles(q: string): Promise<DiscoverResult[]> {
     }
   }
   return articlesViaDdg(q);
+}
+
+async function webArticles(q: string): Promise<DiscoverResult[]> {
+  return (await serpArticles(q)).slice(0, 6);
+}
+
+// Medium: the same SERP scoped to medium.com. Ingestion already rewrites
+// Medium → Freedium, so these read in-app after adding.
+async function mediumArticles(q: string): Promise<DiscoverResult[]> {
+  const r = await serpArticles(`site:medium.com ${q}`);
+  return r
+    .filter((x) => hostOf(x.url)?.includes("medium.com"))
+    .slice(0, 6)
+    .map((x) => ({ ...x, siteName: "Medium" }));
+}
+
+// dev.to: real keyless JSON API. Tag search first (best guess from the query),
+// then top-of-week as a fallback so tech topics still surface something.
+async function devtoArticles(q: string): Promise<DiscoverResult[]> {
+  type DevtoArticle = { title?: string; url?: string; description?: string; cover_image?: string };
+  const fetchList = async (path: string): Promise<DevtoArticle[]> => {
+    const res = await fetch(`https://dev.to/api/articles${path}`, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) throw new Error(`dev.to ${res.status}`);
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  };
+  const tag = q.toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 30);
+  let list: DevtoArticle[] = [];
+  if (tag) {
+    try {
+      list = await fetchList(`?per_page=8&tag=${encodeURIComponent(tag)}`);
+    } catch {
+      list = [];
+    }
+  }
+  if (!list.length) list = await fetchList(`?per_page=8&top=7`);
+  const results: DiscoverResult[] = [];
+  for (const a of list) {
+    if (!a.url || !a.title) continue;
+    results.push({
+      title: a.title,
+      url: a.url,
+      source: "devto",
+      snippet: a.description || undefined,
+      thumbnail: a.cover_image || undefined,
+      siteName: "dev.to",
+    });
+    if (results.length >= 6) break;
+  }
+  return results;
+}
+
+// Wikipedia: keyless REST search. Evergreen background reading for a topic.
+async function wikipediaArticles(q: string): Promise<DiscoverResult[]> {
+  const res = await fetch(
+    `https://en.wikipedia.org/w/rest.php/v1/search/page?q=${encodeURIComponent(q)}&limit=5`,
+    { headers: { "user-agent": UA, accept: "application/json" }, signal: AbortSignal.timeout(10_000) }
+  );
+  if (!res.ok) throw new Error(`wikipedia ${res.status}`);
+  const data = await res.json();
+  type WikiPage = {
+    key?: string;
+    title?: string;
+    excerpt?: string;
+    description?: string;
+    thumbnail?: { url?: string };
+  };
+  const pages: WikiPage[] = Array.isArray(data.pages) ? data.pages : [];
+  const results: DiscoverResult[] = [];
+  for (const p of pages) {
+    if (!p.key || !p.title) continue;
+    const excerpt = (p.excerpt || p.description || "").replace(/<[^>]+>/g, "").trim();
+    const thumb = p.thumbnail?.url
+      ? p.thumbnail.url.startsWith("//")
+        ? `https:${p.thumbnail.url}`
+        : p.thumbnail.url
+      : undefined;
+    results.push({
+      title: p.title,
+      url: `https://en.wikipedia.org/wiki/${encodeURIComponent(p.key)}`,
+      source: "wikipedia",
+      snippet: excerpt || undefined,
+      thumbnail: thumb,
+      siteName: "Wikipedia",
+    });
+  }
+  return results;
 }
 
 // Primary: Jina search (same account as the r.jina.ai reader fallback).
@@ -290,6 +411,17 @@ function hostOf(url: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+// "1.2M views" → 1200000, "1,234 views" → 1234, "No views" → undefined.
+function parseCompactCount(s: string | undefined): number | undefined {
+  if (!s) return undefined;
+  const m = s.replace(/,/g, "").match(/([\d.]+)\s*([KMB])?/i);
+  if (!m) return undefined;
+  const n = parseFloat(m[1]);
+  if (!Number.isFinite(n)) return undefined;
+  const mult = { K: 1e3, M: 1e6, B: 1e9 }[(m[2] || "").toUpperCase()] ?? 1;
+  return Math.round(n * mult);
 }
 
 // The Data API HTML-escapes text fields; only these few entities appear.

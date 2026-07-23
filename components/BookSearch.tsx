@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { C, sans, serif, Card, Eyebrow, Btn, Spinner } from "./lamp-ui";
 
 // What a picked book sends to POST /api/library. Gutenberg picks carry a
-// textUrl and read in-app; Open Library picks are link-only cards.
+// textUrl and read in-app; Open Library / Google Books picks are link-only
+// cards the learner opens externally.
 export type BookPick = {
   provider: "gutenberg" | "openlibrary";
   ref: string;
@@ -82,16 +83,18 @@ async function searchBooks(query: string): Promise<Result[]> {
 // (link-only). Opened from the library's "find more" row.
 export default function BookSearch({
   topicName,
+  initialQuery,
   online,
   onPick,
   onClose,
 }: {
   topicName: string;
+  initialQuery?: string; // v3.6: SuggestPanel hands an unresolved title+author here
   online: boolean;
   onPick: (book: BookPick) => Promise<void>;
   onClose: () => void;
 }) {
-  const [query, setQuery] = useState(topicName);
+  const [query, setQuery] = useState(initialQuery?.trim() || topicName);
   const [results, setResults] = useState<Result[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
@@ -112,11 +115,11 @@ export default function BookSearch({
     setSearching(false);
   };
 
-  // Search the topic name right away — usually what you want.
+  // Search the opening query right away — usually what you want.
   useEffect(() => {
     if (ranInitial.current) return;
     ranInitial.current = true;
-    void search(topicName);
+    void search(query);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

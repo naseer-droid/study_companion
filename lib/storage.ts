@@ -286,7 +286,7 @@ class SupabaseStorage implements StorageAdapter {
     throw new Error(`${context}: ${error?.message ?? "unknown error"}`);
   }
 
-  async load(): Promise<AppData> {
+  async load(_userId: string): Promise<AppData> {
     const [topicsRes, journalRes, questionsRes, libraryRes, discussionRes] = await Promise.all([
       this.supabase
         .from("topics")
