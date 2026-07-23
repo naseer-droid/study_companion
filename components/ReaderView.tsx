@@ -187,15 +187,17 @@ function youtubeEmbed(url: string): { id: string; start: number } | null {
 
 // Recovery affordances for items whose extraction failed: retry the server
 // pipeline, or paste the text (article body / YouTube's Show-Transcript copy)
-// yourself.
+// yourself. Medium items also get a pointer to the readable-mirror toggle.
 function RecoveryBox({
   kind,
   online,
+  mirrorHint,
   onRetry,
   onPaste,
 }: {
   kind: "article" | "youtube" | "book"; // book: retry re-probes, no paste
   online: boolean;
+  mirrorHint?: boolean; // freedium-backed Medium article: "Original page" embed exists
   onRetry: () => Promise<void>;
   onPaste?: (text: string) => Promise<void>;
 }) {
@@ -255,10 +257,16 @@ function RecoveryBox({
             textUnderlineOffset: 3,
           }}
         >
-          {kind === "youtube" ? "Paste the transcript yourself" : "Paste the text yourself"}
+          {kind === "youtube" ? "Paste the transcript yourself" : "Paste the text or HTML yourself"}
         </button>
         )}
       </div>
+      {mirrorHint && (
+        <div style={{ marginTop: 8, fontSize: 12, color: C.dim, lineHeight: 1.5 }}>
+          Tip: the <strong style={{ color: C.ink }}>Original page</strong> button above opens the
+          readable mirror of this article inline — you can read it there even while extraction fails.
+        </div>
+      )}
       {retrying && (
         <div style={{ marginTop: 10 }}>
           <Spinner label="Trying again to pull out the text..." />
@@ -275,7 +283,7 @@ function RecoveryBox({
             value={pasteDraft}
             onChange={(e) => setPasteDraft(e.target.value)}
             rows={5}
-            placeholder={kind === "youtube" ? "Paste the transcript here..." : "Paste the article text here..."}
+            placeholder={kind === "youtube" ? "Paste the transcript here..." : "Paste the article text or HTML here..."}
             style={{
               width: "100%",
               boxSizing: "border-box",
@@ -951,7 +959,7 @@ export default function ReaderView({
                     Read the original ↗
                   </a>{" "}
                   — then tell the companion what you took from it in the discussion.
-                  <RecoveryBox kind="article" online={online} onRetry={onRetry} onPaste={onPaste} />
+                  <RecoveryBox kind="article" online={online} mirrorHint={canEmbedOriginal} onRetry={onRetry} onPaste={onPaste} />
                 </>
               )}
             </div>

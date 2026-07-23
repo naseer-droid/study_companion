@@ -30,9 +30,16 @@ export async function GET(req: Request) {
       return NextResponse.json({ markdown });
     }
 
-    // Markdown → sanitized HTML; stored HTML passes through unchanged.
+    // Markdown → sanitized HTML; stored HTML passes through unchanged. If the
+    // conversion ever fails at runtime, degrade to the raw stored content
+    // (the client renders non-HTML as readable plain text) rather than 500 —
+    // the reader must never say "couldn't extract" while data exists.
     if (content && !looksLikeHtml(content)) {
-      return NextResponse.json({ content: await renderMarkdownToSafeHtml(content) });
+      try {
+        return NextResponse.json({ content: await renderMarkdownToSafeHtml(content) });
+      } catch {
+        return NextResponse.json({ content });
+      }
     }
     return NextResponse.json({ content });
   } catch (e) {

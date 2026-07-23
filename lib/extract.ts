@@ -10,6 +10,7 @@
 // reputation (Jina Reader / Supadata) has to do the fetch.
 
 import type { StorageAdapter } from "./storage";
+import { looksLikeHtml, stripHtml } from "./types";
 import type { LibraryItem, TranscriptSegment } from "./types";
 import { FREEDIUM_MIRROR } from "./links";
 
@@ -382,6 +383,37 @@ async function articleViaJina(url: string): Promise<Extracted> {
   return { title, siteName: host, content };
 }
 
+// Wall/error stubs that used to pass HAS_CONTENT_MIN and render in the reader
+// as if they were the article: freedium's 404 page, bot walls, app-only stubs.
+// Matched case-insensitively against the stripped text.
+const JUNK_SIGNATURES = [
+  "article not found", // freedium 404 page (served with its chrome text)
+  "out of nothing, something", // medium.com 404 page tagline
+  "blocked by network security", // reddit / datacenter bot wall
+  "couldn't access the content delivery", // app-only stub (salesforce etc.)
+  "sign up now to get your own personalized timeline", // X login wall
+  "enable javascript and cookies to continue", // cloudflare challenge
+  "verify you are human", // cloudflare/turnstile interstitial
+];
+// Weaker signals (a real long article can mention them) count only for short
+// stubs — e.g. Medium's own 404 page ("PAGE NOT FOUND … 404", ~220 chars).
+const JUNK_SHORT_MAX = 500;
+const JUNK_SHORT_SIGNATURES = ["page not found", "404"];
+
+// The honest "is this a real article?" gate: enough real text, and none of
+// the known wall/error signatures. Anything junk is treated as "no content"
+// so the fallback chain keeps going and failures stay failures.
+export function looksLikeJunkContent(content: string): boolean {
+  if (!content) return true;
+  const text = (looksLikeHtml(content) ? stripHtml(content) : content).trim();
+  if (text.length < HAS_CONTENT_MIN) return true;
+  const lower = text.toLowerCase();
+  if (JUNK_SIGNATURES.some((sig) => lower.includes(sig))) return true;
+  return (
+    text.length < JUNK_SHORT_MAX && JUNK_SHORT_SIGNATURES.some((sig) => lower.includes(sig))
+  );
+}
+
 export async function extractContent(
   url: string,
   kind: "article" | "youtube",
@@ -400,24 +432,44 @@ export async function extractContent(
   } catch {
     // fall through to Jina
   }
-  if (direct && direct.content.length > HAS_CONTENT_MIN) return direct;
+  if (direct && !looksLikeJunkContent(direct.content)) return direct;
+
+  // The direct fetch may have gotten real metadata (og:image, site name) even
+  // when the text was walled — keep it and let Jina fill the content.
+  const withDirectMeta = (jina: Extracted): Extracted =>
+    direct
+      ? {
+          title: direct.title || jina.title,
+          siteName: direct.siteName ?? jina.siteName,
+          thumbnail: direct.thumbnail,
+          content: jina.content,
+        }
+      : jina;
+
   try {
     const jina = await articleViaJina(url);
-    // The direct fetch may have gotten real metadata (og:image, site name)
-    // even when the text was walled — keep it and let Jina fill the content.
-    if (direct) {
-      return {
-        title: direct.title || jina.title,
-        siteName: direct.siteName ?? jina.siteName,
-        thumbnail: direct.thumbnail,
-        content: jina.content,
-      };
-    }
-    return jina;
+    if (!looksLikeJunkContent(jina.content)) return withDirectMeta(jina);
   } catch {
-    if (direct) return direct; // thin, but better than nothing
-    throw new Error("could not fetch the page");
+    // fall through to the original-URL attempt / best effort below
   }
+
+  // Medium is read through the freedium mirror; when the mirror 404s or
+  // slow-walks, Jina-on-the-mirror just mirrors the error page. The original
+  // medium.com URL renders fine through Jina — try it before giving up.
+  if (url.startsWith(`${FREEDIUM_MIRROR}/`)) {
+    const originalUrl = url.slice(FREEDIUM_MIRROR.length + 1);
+    try {
+      const jinaOriginal = await articleViaJina(originalUrl);
+      if (!looksLikeJunkContent(jinaOriginal.content)) {
+        return { ...withDirectMeta(jinaOriginal), siteName: "Medium" };
+      }
+    } catch {
+      // best effort below
+    }
+  }
+
+  if (direct) return direct; // thin/walled, but better than nothing
+  throw new Error("could not fetch the page");
 }
 
 // Freedium suffixes its own name onto page titles; the mirror is always
@@ -447,7 +499,12 @@ export async function extractAndStore(
   try {
     const videoId = item.kind === "youtube" ? youtubeVideoId(new URL(item.url)) : null;
     const extracted = polishMirrored(await extractContent(item.url, item.kind, videoId), item.url);
-    const hasContent = extracted.content.length > HAS_CONTENT_MIN;
+    // Articles must pass the junk gate (wall/404 stubs are failures, not
+    // content); transcripts keep the plain length check (JSON segments).
+    const hasContent =
+      item.kind === "youtube"
+        ? extracted.content.length > HAS_CONTENT_MIN
+        : !looksLikeJunkContent(extracted.content);
     const patch: ExtractPatch = {
       hasContent,
       extraction: hasContent ? "ok" : "failed",
