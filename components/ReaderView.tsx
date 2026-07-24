@@ -6,6 +6,7 @@ import { extractionState, parseTranscript, looksLikeHtml, stripHtml } from "@/li
 import { FREEDIUM_MIRROR } from "@/lib/links";
 import { videoEmbed } from "@/lib/embed";
 import { C, serif, sans, Btn, Spinner } from "./lamp-ui";
+import ArticleMarkdown from "./ArticleMarkdown";
 
 // Compact A−/A+ font-size control in the reader header.
 function fontBtn(disabled: boolean): React.CSSProperties {
@@ -20,6 +21,21 @@ function fontBtn(disabled: boolean): React.CSSProperties {
     fontSize: 13,
     fontWeight: 700,
     padding: "6px 9px",
+  };
+}
+
+// Write/Preview tab in the editor + AI preview panels.
+function tabBtn(active: boolean): React.CSSProperties {
+  return {
+    background: active ? C.amber : "transparent",
+    color: active ? "#1B1406" : C.dim,
+    border: `1px solid ${active ? C.amber : C.line}`,
+    borderRadius: 8,
+    cursor: "pointer",
+    fontFamily: sans,
+    fontSize: 13,
+    fontWeight: 700,
+    padding: "6px 12px",
   };
 }
 
@@ -348,6 +364,17 @@ export default function ReaderView({
   const [fontScale, setFontScale] = useState(1);
   const [toc, setToc] = useState<{ id: string; text: string; level: number }[]>([]);
   const [exported, setExported] = useState(false);
+  // v3.9: in-app editing + AI organize.
+  const [editing, setEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState("");
+  const [editTab, setEditTab] = useState<"write" | "preview">("write");
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState("");
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiBusy, setAiBusy] = useState<string | null>(null); // running action label
+  const [aiError, setAiError] = useState("");
+  const [aiResult, setAiResult] = useState<{ markdown: string; canSave: boolean; label: string } | null>(null);
+  const [progress, setProgress] = useState(0); // reading progress, 0..1
   const articleRef = useRef<HTMLElement | null>(null);
   const mainRef = useRef<HTMLDivElement | null>(null);
 
@@ -414,6 +441,104 @@ export default function ReaderView({
       // network hiccup — silently ignore; the button can be pressed again
     }
   };
+
+  // --- v3.9: editing (always in Markdown) ---
+  const startEdit = async () => {
+    setEditError("");
+    setAiResult(null);
+    let md = content ?? "";
+    try {
+      const res = await fetch(`/api/library/content?itemId=${encodeURIComponent(item.id)}&as=md`);
+      const data = res.ok ? await res.json() : null;
+      if (typeof data?.markdown === "string") md = data.markdown;
+    } catch {
+      // fall back to whatever is on screen
+    }
+    setEditDraft(md);
+    setEditTab("write");
+    setEditing(true);
+  };
+
+  const saveContent = async (text: string): Promise<boolean> => {
+    const res = await fetch("/api/library/edit", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ itemId: item.id, content: text }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.error || "Couldn't save.");
+    }
+    return true;
+  };
+
+  const saveEdit = async () => {
+    const text = editDraft.trim();
+    if (!text || editBusy) return;
+    setEditBusy(true);
+    setEditError("");
+    try {
+      await saveContent(text);
+      setContent(text);
+      setEditing(false);
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : "Couldn't save your edit.");
+    }
+    setEditBusy(false);
+  };
+
+  // --- v3.9: organize with AI (preview, then accept or discard — never
+  // saves silently) ---
+  const runOrganize = async (
+    action: string,
+    label: string,
+    canSave: boolean,
+    selection?: string
+  ) => {
+    if (aiBusy) return;
+    setAiBusy(label);
+    setAiError("");
+    setAiResult(null);
+    try {
+      const res = await fetch("/api/library/organize", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ itemId: item.id, action, selection }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "The companion couldn't do that just now.");
+      const markdown = typeof data?.markdown === "string" ? data.markdown : "";
+      if (!markdown.trim()) throw new Error("The companion returned nothing — try again.");
+      setAiResult({ markdown, canSave, label });
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : "Something went wrong — try again.");
+    }
+    setAiBusy(null);
+  };
+
+  const acceptAi = async () => {
+    if (!aiResult || editBusy) return;
+    setEditBusy(true);
+    setAiError("");
+    try {
+      await saveContent(aiResult.markdown);
+      setContent(aiResult.markdown);
+      setAiResult(null);
+      setAiOpen(false);
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : "Couldn't save that.");
+    }
+    setEditBusy(false);
+  };
+
+  const copyAi = async () => {
+    if (!aiResult) return;
+    try {
+      await navigator.clipboard.writeText(aiResult.markdown);
+    } catch {
+      // clipboard blocked — no-op
+    }
+  };
   // Medium items were rewritten to the Freedium mirror at ingestion, so their
   // stored URL is embeddable (Medium itself sets X-Frame-Options); offer to
   // view the real page inline. Non-mirror articles keep only "Original ↗".
@@ -441,10 +566,17 @@ export default function ReaderView({
     });
   };
 
-  // A new item resets the transient view state (seek target, embed toggle).
+  // A new item resets the transient view state (seek target, embed toggle,
+  // edit/AI panels, progress).
   useEffect(() => {
     setSeekTime(null);
     setMode("reader");
+    setEditing(false);
+    setAiResult(null);
+    setAiOpen(false);
+    setAiError("");
+    setEditError("");
+    setProgress(0);
   }, [item.id]);
 
   // Article text / video transcript are fetched on demand — load() never ships
@@ -549,12 +681,23 @@ export default function ReaderView({
     };
   }, []);
 
-  const quoteSelection = () => {
+  // Select-to-act: a highlighted passage can be discussed (existing quote
+  // flow), rewritten/explained by AI, or opened in the editor.
+  const pillAction = (kind: "discuss" | "rewrite" | "explain" | "edit") => {
     if (!pill) return;
-    onQuote(pill.text);
+    const text = pill.text;
     window.getSelection()?.removeAllRanges();
     setPill(null);
-    setSheetOpen(true);
+    if (kind === "discuss") {
+      onQuote(text);
+      setSheetOpen(true);
+    } else if (kind === "edit") {
+      startEdit();
+    } else if (kind === "rewrite") {
+      runOrganize("rewrite", "Rewrite", false, text);
+    } else {
+      runOrganize("explain", "Explain", false, text);
+    }
   };
 
   const embed = item.kind === "youtube" ? youtubeEmbed(item.url) : null;
@@ -575,6 +718,8 @@ export default function ReaderView({
     setPill(null);
     const main = mainRef.current;
     if (main && item.kind === "article") {
+      const span = main.scrollHeight - main.clientHeight;
+      setProgress(span > 0 ? Math.min(1, Math.max(0, main.scrollTop / span)) : 0);
       try {
         window.localStorage.setItem(`lamp-article-pos-${item.id}`, String(Math.round(main.scrollTop)));
       } catch {
@@ -584,7 +729,7 @@ export default function ReaderView({
   };
 
   const articleStyle: React.CSSProperties = {
-    maxWidth: "65ch",
+    maxWidth: "68ch",
     margin: "0 auto",
     padding: "24px 20px 64px",
     fontFamily: serif,
@@ -680,7 +825,16 @@ export default function ReaderView({
             </button>
           </div>
         )}
-        {item.kind === "article" && item.hasContent && mode === "reader" && (
+        {item.kind === "article" && item.hasContent && mode === "reader" && !editing && !aiResult && (
+          <Btn
+            variant="ghost"
+            onClick={startEdit}
+            style={{ padding: "8px 12px", fontSize: 13, flexShrink: 0 }}
+          >
+            Edit
+          </Btn>
+        )}
+        {item.kind === "article" && item.hasContent && mode === "reader" && !editing && (
           <Btn
             variant="ghost"
             onClick={exportMarkdown}
@@ -700,6 +854,19 @@ export default function ReaderView({
           </a>
         )}
       </header>
+
+      {item.kind === "article" && mode === "reader" && content && !editing && !aiResult && (
+        <div style={{ height: 2, background: C.line, flexShrink: 0 }}>
+          <div
+            style={{
+              height: "100%",
+              width: `${Math.round(progress * 100)}%`,
+              background: C.amber,
+              transition: "width 0.1s linear",
+            }}
+          />
+        </div>
+      )}
 
       <div className="lc-reader-body">
         <div ref={mainRef} className="lc-reader-main" onScroll={onMainScroll}>
@@ -870,74 +1037,215 @@ export default function ReaderView({
                 style={{ flex: 1, width: "100%", minHeight: "82vh", border: 0, background: "#fff" }}
               />
             </div>
+          ) : editing ? (
+            <div style={{ maxWidth: "76ch", margin: "0 auto", padding: "16px 20px 64px", fontFamily: sans }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button onClick={() => setEditTab("write")} style={tabBtn(editTab === "write")}>
+                    Write
+                  </button>
+                  <button onClick={() => setEditTab("preview")} style={tabBtn(editTab === "preview")}>
+                    Preview
+                  </button>
+                </div>
+                <div style={{ flex: 1 }} />
+                <Btn
+                  variant="ghost"
+                  onClick={() => {
+                    setEditing(false);
+                    setEditError("");
+                  }}
+                  disabled={editBusy}
+                  style={{ padding: "7px 12px", fontSize: 13 }}
+                >
+                  Cancel
+                </Btn>
+                <Btn
+                  onClick={saveEdit}
+                  disabled={editBusy || !editDraft.trim() || !online}
+                  style={{ padding: "7px 14px", fontSize: 13 }}
+                >
+                  {editBusy ? "Saving…" : "Save"}
+                </Btn>
+              </div>
+              {editTab === "write" ? (
+                <textarea
+                  value={editDraft}
+                  onChange={(e) => setEditDraft(e.target.value)}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    minHeight: "62vh",
+                    background: C.bg,
+                    border: `1px solid ${C.line}`,
+                    borderRadius: 10,
+                    padding: "12px 14px",
+                    color: C.ink,
+                    fontSize: 15,
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                    lineHeight: 1.6,
+                    outline: "none",
+                    resize: "vertical",
+                  }}
+                />
+              ) : (
+                <article className="lc-article-html" style={{ ...htmlArticleStyle, maxWidth: "none", padding: 0 }}>
+                  <ArticleMarkdown content={editDraft.trim() || "*(nothing to preview)*"} />
+                </article>
+              )}
+              {editError && <div style={{ marginTop: 8, color: C.danger, fontSize: 12 }}>{editError}</div>}
+            </div>
+          ) : aiResult ? (
+            <div style={{ maxWidth: "76ch", margin: "0 auto", padding: "16px 20px 64px", fontFamily: sans }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+                <span
+                  style={{
+                    color: C.amber,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  ✨ {aiResult.label} — preview
+                </span>
+                <div style={{ flex: 1 }} />
+                {aiResult.canSave && (
+                  <Btn
+                    onClick={acceptAi}
+                    disabled={editBusy || !online}
+                    style={{ padding: "7px 14px", fontSize: 13 }}
+                  >
+                    {editBusy ? "Saving…" : "Save as article"}
+                  </Btn>
+                )}
+                <Btn variant="ghost" onClick={copyAi} style={{ padding: "7px 12px", fontSize: 13 }}>
+                  Copy
+                </Btn>
+                <Btn
+                  variant="ghost"
+                  onClick={() => setAiResult(null)}
+                  disabled={editBusy}
+                  style={{ padding: "7px 12px", fontSize: 13 }}
+                >
+                  Discard
+                </Btn>
+              </div>
+              {aiError && <div style={{ marginBottom: 8, color: C.danger, fontSize: 12 }}>{aiError}</div>}
+              <article className="lc-article-html" style={{ ...htmlArticleStyle, maxWidth: "none", padding: 0 }}>
+                <ArticleMarkdown content={aiResult.markdown} />
+              </article>
+            </div>
           ) : loading ? (
             <div style={{ padding: 40, display: "flex", justifyContent: "center" }}>
               <Spinner label="Laying out the article..." />
             </div>
           ) : content ? (
-            looksLikeHtml(content) ? (
-              <>
-                {toc.length > 0 && (
-                  <details
+            <>
+              {toc.length > 0 && (
+                <details
+                  style={{
+                    maxWidth: "68ch",
+                    margin: "16px auto 0",
+                    padding: "0 20px",
+                    fontFamily: sans,
+                  }}
+                >
+                  <summary
                     style={{
-                      maxWidth: "65ch",
-                      margin: "16px auto 0",
-                      padding: "0 20px",
-                      fontFamily: sans,
+                      cursor: "pointer",
+                      color: C.dim,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      letterSpacing: "0.06em",
+                      textTransform: "uppercase",
                     }}
                   >
-                    <summary
-                      style={{
-                        cursor: "pointer",
-                        color: C.dim,
-                        fontSize: 12,
-                        fontWeight: 700,
-                        letterSpacing: "0.06em",
-                        textTransform: "uppercase",
-                      }}
-                    >
-                      Contents
-                    </summary>
-                    <ul style={{ listStyle: "none", margin: "10px 0 0", padding: 0 }}>
-                      {toc.map((h) => (
-                        <li key={h.id} style={{ margin: "2px 0" }}>
-                          <button
-                            onClick={() =>
-                              document
-                                .getElementById(h.id)
-                                ?.scrollIntoView({ behavior: "smooth", block: "start" })
-                            }
-                            style={{
-                              background: "none",
-                              border: "none",
-                              padding: `2px 0 2px ${h.level === 3 ? 16 : 0}px`,
-                              color: C.dim,
-                              fontFamily: sans,
-                              fontSize: 13,
-                              lineHeight: 1.5,
-                              textAlign: "left",
-                              cursor: "pointer",
-                            }}
-                          >
-                            {h.text}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
+                    Contents
+                  </summary>
+                  <ul style={{ listStyle: "none", margin: "10px 0 0", padding: 0 }}>
+                    {toc.map((h) => (
+                      <li key={h.id} style={{ margin: "2px 0" }}>
+                        <button
+                          onClick={() =>
+                            document
+                              .getElementById(h.id)
+                              ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                          }
+                          style={{
+                            background: "none",
+                            border: "none",
+                            padding: `2px 0 2px ${h.level === 3 ? 16 : 0}px`,
+                            color: C.dim,
+                            fontFamily: sans,
+                            fontSize: 13,
+                            lineHeight: 1.5,
+                            textAlign: "left",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {h.text}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+              <div
+                style={{
+                  maxWidth: "68ch",
+                  margin: "12px auto 0",
+                  padding: "0 20px",
+                  fontFamily: sans,
+                }}
+              >
+                <button
+                  onClick={() => setAiOpen((v) => !v)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: C.amber,
+                    cursor: "pointer",
+                    fontFamily: sans,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                    padding: 0,
+                  }}
+                >
+                  ✨ Organize with AI {aiOpen ? "▾" : "▸"}
+                </button>
+                {aiOpen && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+                    {(
+                      [
+                        ["tidy", "Tidy & headings"],
+                        ["summarize", "Summarize"],
+                        ["simplify", "Simplify"],
+                        ["fixFormatting", "Fix formatting"],
+                      ] as const
+                    ).map(([a, label]) => (
+                      <Btn
+                        key={a}
+                        variant="ghost"
+                        onClick={() => runOrganize(a, label, true)}
+                        disabled={!!aiBusy || !online}
+                        style={{ padding: "7px 12px", fontSize: 13 }}
+                      >
+                        {aiBusy === label ? "Working…" : label}
+                      </Btn>
+                    ))}
+                  </div>
                 )}
-                <article
-                  ref={articleRef}
-                  className="lc-article-html"
-                  style={htmlArticleStyle}
-                  dangerouslySetInnerHTML={{ __html: content }}
-                />
-              </>
-            ) : (
-              <article ref={articleRef} style={articleStyle}>
-                {content}
+                {aiError && (
+                  <div style={{ marginTop: 8, color: C.danger, fontSize: 12 }}>{aiError}</div>
+                )}
+              </div>
+              <article ref={articleRef} className="lc-article-html" style={htmlArticleStyle}>
+                <ArticleMarkdown content={content} />
               </article>
-            )
+            </>
           ) : (
             <div
               style={{
@@ -1022,31 +1330,50 @@ export default function ReaderView({
       )}
 
       {pill && (
-        <button
-          onClick={quoteSelection}
-          onTouchEnd={(e) => {
-            e.preventDefault();
-            quoteSelection();
-          }}
+        <div
           style={{
             position: "fixed",
             top: pill.top,
-            left: pill.left,
+            left: Math.min(pill.left, window.innerWidth - 268),
             zIndex: 80,
+            display: "flex",
             background: C.amber,
-            color: "#1B1406",
-            border: "none",
             borderRadius: 999,
-            padding: "8px 16px",
-            fontFamily: sans,
-            fontSize: 13,
-            fontWeight: 700,
-            cursor: "pointer",
+            overflow: "hidden",
             boxShadow: "0 4px 14px rgba(0,0,0,0.45)",
           }}
         >
-          Discuss this
-        </button>
+          {(
+            [
+              ["discuss", "Discuss"],
+              ["rewrite", "Rewrite"],
+              ["explain", "Explain"],
+              ["edit", "Edit"],
+            ] as const
+          ).map(([k, label], i) => (
+            <button
+              key={k}
+              onClick={() => pillAction(k)}
+              onTouchEnd={(e) => {
+                e.preventDefault();
+                pillAction(k);
+              }}
+              style={{
+                background: "transparent",
+                color: "#1B1406",
+                border: "none",
+                borderLeft: i === 0 ? "none" : "1px solid rgba(27,20,6,0.18)",
+                padding: "8px 13px",
+                cursor: "pointer",
+                fontFamily: sans,
+                fontSize: 13,
+                fontWeight: 700,
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       )}
 
       {!sheetOpen && (

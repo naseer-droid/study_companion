@@ -71,6 +71,37 @@ Things only you can do. Tick them here **and** update the matching line in
   - *Verify:* opens full-screen with the lamp icon; airplane mode still shows
     your topics read-only with the offline banner.
 
+## v3.9 Hero reader — client rendering, editing, AI organize — new owner actions (2026-07-24)
+
+v3.9 makes the reader the hero feature and **fixes the raw-`###` bug for real**.
+The v3.8 fix rendered Markdown→HTML on the *server*, which failed inside Vercel's
+serverless bundle (the ESM-only `marked`), and a later try/catch silently showed
+you the raw `###`. Now articles render **on the client** with react-markdown, so
+**every already-saved article renders formatted with no migration** and the
+failure can't recur. On top of that: **images load** (via an `/api/img` proxy
+that defeats mixed-content/hotlink blocks), you can **edit any article** in
+Markdown (Write/Preview → Save), **organize with AI** (Tidy / Summarize /
+Simplify / Fix formatting for the whole piece, or Rewrite / Explain a selection),
+and a **select-to-act pill** offers Discuss · Rewrite · Explain · Edit. **No
+schema change and no new required env vars**; the new deps are bundled.
+
+- [ ] **Push + redeploy** — no schema change is required for v3.9. *(Pushed by
+  Claude this session per your instruction; you handle the redeploy/verify.)*
+  - *Why only you:* the deploy/verify step is yours.
+
+- [ ] **Verify on the phone** after redeploy:
+  - Open an article that previously showed raw `###` → it now renders with real
+    **headings, bold, links, and images**.
+  - In an article reader tap **Edit** → tweak the Markdown → **Save**; reopen and
+    the change persisted. (Write/Preview tabs show a live preview.)
+  - Tap **✨ Organize with AI** → **Tidy & headings** / **Summarize** / etc. → a
+    preview appears → **Save as article** keeps it, **Copy**/**Discard** don't.
+  - **Highlight** a sentence → the pill offers **Discuss · Rewrite · Explain ·
+    Edit**; Rewrite/Explain return an AI preview you can Copy.
+  - A thin **reading-progress** bar under the header tracks your scroll.
+  - *(If a specific image still doesn't load, that host is blocking hotlinks even
+    with the proxy — rare; the rest of the article is unaffected.)*
+
 ## v3.8 Markdown reader + MD input + filter fixes — new owner actions (2026-07-24)
 
 v3.8 (1) fixes the **raw-Markdown reader bug** — articles stored as Markdown

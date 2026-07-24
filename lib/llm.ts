@@ -37,11 +37,11 @@ async function callOpenAiCompatible(prompt: string, baseUrl: string, defaultMode
   return text;
 }
 
-async function callAnthropic(prompt: string): Promise<string> {
+async function callAnthropic(prompt: string, maxTokens = MAX_TOKENS): Promise<string> {
   const client = new Anthropic(); // reads ANTHROPIC_API_KEY
   const response = await client.messages.create({
     model: env("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
-    max_tokens: MAX_TOKENS,
+    max_tokens: maxTokens,
     messages: [{ role: "user", content: prompt }],
   });
   return response.content
@@ -79,6 +79,10 @@ function callMock(prompt: string): string {
       nextSuggestion: "Tomorrow, try a 15-minute practical exercise on what you just learned.",
     });
   }
+  // AI organize (v3.9) mock: returns raw Markdown (askModelText path), not JSON.
+  if (prompt.includes("reformat or rewrite this saved article")) {
+    return "## Mock organized result\n\nThis is a **mock** tidy of the article. The key idea is stated plainly, then:\n\n- a first point\n- a second point\n\n> A short takeaway to close.\n";
+  }
   // Study Room (v3.0) mock branches — keyed on distinctive prompt substrings.
   if (prompt.includes("just spent time with this")) {
     return JSON.stringify({
@@ -109,11 +113,11 @@ function callMock(prompt: string): string {
   });
 }
 
-async function callProvider(prompt: string): Promise<string> {
+async function callProvider(prompt: string, maxTokens?: number): Promise<string> {
   const provider = env("LLM_PROVIDER", "kimi").toLowerCase();
   switch (provider) {
     case "anthropic":
-      return callAnthropic(prompt);
+      return callAnthropic(prompt, maxTokens);
     case "kimi":
     case "moonshot":
       // Kimi Code endpoint (API key from the Kimi Code Console, uses the
@@ -121,11 +125,11 @@ async function callProvider(prompt: string): Promise<string> {
       // LLM_BASE_URL=https://api.moonshot.cn/v1 and its LLM_MODEL slug.
       // K3 reasons before answering and reasoning shares the completion
       // budget — at 1024 tokens thinking consumes it all (empty reply).
-      return callOpenAiCompatible(prompt, env("LLM_BASE_URL", "https://api.kimi.com/coding/v1"), "k3", 4096);
+      return callOpenAiCompatible(prompt, env("LLM_BASE_URL", "https://api.kimi.com/coding/v1"), "k3", maxTokens ?? 4096);
     case "deepseek":
-      return callOpenAiCompatible(prompt, "https://api.deepseek.com", "deepseek-chat");
+      return callOpenAiCompatible(prompt, "https://api.deepseek.com", "deepseek-chat", maxTokens ?? MAX_TOKENS);
     case "openrouter":
-      return callOpenAiCompatible(prompt, "https://openrouter.ai/api/v1", "anthropic/claude-sonnet-4.6");
+      return callOpenAiCompatible(prompt, "https://openrouter.ai/api/v1", "anthropic/claude-sonnet-4.6", maxTokens ?? MAX_TOKENS);
     case "mock":
       return callMock(prompt);
     default:
@@ -155,6 +159,17 @@ export async function askModel(prompt: string): Promise<unknown> {
       throw new LlmError("The companion's response wasn't readable. Please try again.");
     }
   }
+}
+
+/**
+ * Ask the configured model for free-form TEXT (not JSON). Used by the reader's
+ * "organize with AI", where the result is a rewritten Markdown article — large
+ * and full of quotes/newlines/backticks that are fragile to escape inside JSON.
+ * Callers pass a generous token budget since a whole tidied article is long.
+ */
+export async function askModelText(prompt: string, maxTokens?: number): Promise<string> {
+  const text = await callProvider(prompt, maxTokens);
+  return typeof text === "string" ? text : "";
 }
 
 export function errorMessage(e: unknown): string {

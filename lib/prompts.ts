@@ -213,3 +213,40 @@ Respond ONLY with valid JSON, no markdown fences, in exactly this shape:
  "greeting": "1-2 warm sentences of continuity that reference where you left off together, then one concrete suggestion for today. Under 45 words total."
 }`;
 }
+
+// ---------------------------------------------------------------------------
+// Reader "organize with AI" (v3.9). Unlike every prompt above, this returns
+// RAW Markdown (not JSON) via askModelText — the output is a rewritten article
+// body, too large and quote/newline-heavy to escape reliably inside JSON. The
+// route saves nothing; the learner previews the result and accepts or discards.
+// ---------------------------------------------------------------------------
+export type OrganizeAction =
+  | "tidy"
+  | "summarize"
+  | "simplify"
+  | "fixFormatting"
+  | "rewrite"
+  | "explain";
+
+export function organizePrompt(action: OrganizeAction, itemTitle: string, text: string): string {
+  const instructions: Record<OrganizeAction, string> = {
+    tidy: "Reformat this into clean, well-structured Markdown. Add clear ## and ### headings where they help, use proper lists, blockquotes, and fenced code blocks, and fix run-together or broken formatting. Keep ALL the substantive content and meaning — do not summarize, drop sections, add commentary, or invent facts.",
+    summarize:
+      "Write a concise Markdown summary: one short intro sentence, then the key points as a bulleted list, then a single bold takeaway line. Keep it faithful to the source.",
+    simplify:
+      "Rewrite this in simpler, plain language for a curious beginner, keeping the key ideas and overall structure. Use short sentences, short paragraphs, and Markdown headings/lists. Do not invent facts.",
+    fixFormatting:
+      "The Markdown formatting is broken — raw symbols showing, headings run into text, lists not rendering. Fix ONLY the formatting and structure into clean Markdown. Do NOT change the wording, meaning, or order of the content.",
+    rewrite:
+      "Rewrite the following passage more clearly and smoothly, keeping its exact meaning. Return only the rewritten passage.",
+    explain:
+      "Explain the following passage in plain, friendly language for a learner — briefly, a few sentences. Return Markdown.",
+  };
+  const isSelection = action === "rewrite" || action === "explain";
+  const label = isSelection ? "passage" : "article";
+  return `You are helping a learner reformat or rewrite this saved article: "${itemTitle}".
+${instructions[action]}
+The ${label} (in Markdown) is:
+"""${text}"""
+Return ONLY the resulting Markdown — no preamble, no explanation, and do NOT wrap the whole thing in a code fence.`;
+}
